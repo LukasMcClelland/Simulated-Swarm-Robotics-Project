@@ -1,20 +1,16 @@
-2020-02-13 10:51:43,567 Main    : create and start thread 0.
-2020-02-13 10:51:43,567 Thread 0: starting
-2020-02-13 10:51:43,567 Thread 0: stepping
-2020-02-13 10:51:43,692 Thread 0: stepping
-2020-02-13 10:51:43,802 Thread 0: stepping
-2020-02-13 10:51:43,911 Thread 0: stepping
-2020-02-13 10:51:44,020 Thread 0: stepping
-2020-02-13 10:51:44,130 Thread 0: stepping
-2020-02-13 10:51:44,239 Thread 0: stepping
-2020-02-13 10:51:44,348 Thread 0: stepping
-2020-02-13 10:51:44,458 Thread 0: stepping
-2020-02-13 10:51:44,567 Thread 0: stepping
-2020-02-13 10:51:44,677 Thread 0: stepping
-2020-02-13 10:51:44,786 Thread 0: stepping
-2020-02-13 10:51:44,895 Thread 0: stepping
-2020-02-13 10:51:45,005 Thread 0: stepping
-2020-02-13 10:51:45,114 Thread 0: stepping
-2020-02-13 10:51:45,223 Thread 0: stepping
-2020-02-13 10:51:45,333 Thread 0: stepping
-2020-02-13 10:51:45,442 Thread 0: stepping
+2020-02-13 10:58:25,232 Main    : create and start thread 0.
+2020-02-13 10:58:25,234 Thread 0: starting
+2020-02-13 10:58:25,235 Thread 0: stepping
+2020-02-13 10:58:25,336 Thread 0: stepping
+2020-02-13 10:58:25,437 Thread 0: stepping
+2020-02-13 10:58:25,538 Thread 0: stepping
+2020-02-13 10:58:25,639 Thread 0: stepping
+2020-02-13 10:58:25,739 Thread 0: stepping
+2020-02-13 10:58:25,839 Thread 0: stepping
+2020-02-13 10:58:25,940 Thread 0: stepping
+2020-02-13 10:58:26,041 Thread 0: stepping
+2020-02-13 10:58:26,142 Thread 0: stepping
+2020-02-13 10:58:26,243 Thread 0: stepping
+2020-02-13 10:58:26,344 Thread 0: stepping
+2020-02-13 10:58:26,445 Thread 0: stepping
+2020-02-13 10:58:26,546 Thread 0: stepping

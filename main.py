@@ -2,7 +2,6 @@
 import queue
 import threading
 import logging
-import io
 import time
 
 from PIL import Image, ImageTk, ImageDraw
