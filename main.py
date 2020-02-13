@@ -3,7 +3,6 @@ import queue
 import threading
 import logging
 import time
-
 from PIL import Image, ImageTk, ImageDraw
 import tkinter as tk
 from random import randint
@@ -30,8 +29,11 @@ threads = list()
 threadEvents = list()
 paused = False
 
-class Bot:
+class Bot(threading.Thread):
     def __init__(self, botNumber):
+        threading.Thread.__init__(self)
+        self.paused = False
+        self.pause_cond = threading.Condition(threading.Lock())
         self.colour = botPathColours[randint(0, len(botPathColours) - 1)]
         self.name = self.colour[0]
         self.pathRGB = self.colour[1]
@@ -41,6 +43,33 @@ class Bot:
         self.pathToBeDrawn = queue.Queue()
         self.number = botNumber
         self.drawCircle = 0
+
+    def run(self):
+        # Main bot loop
+        while True:
+            with self.pause_cond:
+                while self.paused:
+                    self.pause_cond.wait()
+                while True:
+                    yStep = randint(-botStepSize, botStepSize)
+                    xStep = randint(-botStepSize, botStepSize)
+                    if validMove(bot.y, bot.x, bot.y + yStep, bot.x + xStep):
+                        break
+                prevStep = (bot.y, bot.x)
+                bot.pathHistory.append(prevStep)
+                bot.y += yStep
+                bot.x += xStep
+                bot.pathToBeDrawn.put((prevStep, (bot.y, bot.x)))
+                time.sleep(botSlowdown)
+
+    def pause(self):
+        self.paused = True
+        self.pause_cond.acquire()
+
+    def resume(self):
+        self.paused = False
+        self.pause_cond.notify()
+        self.pause_cond.release()
 
 # Function implemented with the help of http://www.roguebasin.com/index.php?title=Bresenham%27s_Line_Algorithm
 # Checks each point in a line to ensure a bot doesn't "jump" over an illegal area
@@ -54,11 +83,9 @@ def validMove(currentY, currentX, futureY, futureX):
             futureX, futureY = futureY, futureX
 
         # If end point is to the left of start point, then swap start and end points
-        startEndSwapped = False
         if currentX > futureX:
             currentX, futureX = futureX, currentX
             currentY, futureY = futureY, currentY
-            startEndSwapped = True
 
         # Calculate differences, error, and yStep
         dx = futureX - currentX
@@ -85,33 +112,6 @@ def validMove(currentY, currentX, futureY, futureX):
     else:
         return False
 
-def threadFunction(number, event):
-    # Initialize bot
-    logger.info("Thread %s: starting", number)
-    bot = Bot(number)
-    listOfBots.append(bot)
-
-    # Main bot loop
-    while True:
-        # if
-
-        logger.info("Thread %s: stepping", number)
-        while True:
-            yStep = randint(-botStepSize, botStepSize)
-            xStep = randint(-botStepSize, botStepSize)
-            if validMove(bot.y, bot.x, bot.y + yStep, bot.x + xStep):
-                break
-        prevStep = (bot.y, bot.x)
-        bot.pathHistory.append(prevStep)
-        bot.y += yStep
-        bot.x += xStep
-        bot.pathToBeDrawn.put((prevStep, (bot.y, bot.x)))
-        time.sleep(botSlowdown)
-
-    # Logging and cleanup
-    # logger.info("Thread %s: finishing", name)
-
-
 def updateGUI(w, bots, imageDraw):
     for bot in bots:
         while not bot.pathToBeDrawn.empty():
@@ -133,12 +133,16 @@ def updateGUI(w, bots, imageDraw):
     w.pack()
 
 def clickCallback(event):
+    logging.info(event)
+    global paused
     if not paused:
-        for e in threadEvents:
-            e.clear()
+        paused = True
+        for bot in listOfBots:
+            bot.pause()
     else:
-        for e in threadEvents:
-            e.set()
+        paused = False
+        for bot in listOfBots:
+            bot.resume()
 
 # Main function
 if __name__ == "__main__":
@@ -189,16 +193,14 @@ if __name__ == "__main__":
     logger.setLevel(logging.DEBUG)
 
 
+
     # Launch threads
     print("Starting threads")
-    threads = list()
     for index in range(numberOfBots):
         logging.info("Main    : create and start thread %d.", index)
-        e = threading.Event()
-        x = threading.Thread(target=threadFunction, args=(index,e,))
-        threadEvents.append(e)
-        threads.append(x)
-        x.start()
+        bot = Bot(index)
+        listOfBots.append(bot)
+        bot.start()
     print("Done starting threads")
 
     # Draw initial bot positions
