@@ -1,5 +1,7 @@
 #TODO
-# look into if object attribute (foo.bar) lookups are actually super slow !
+# -look into if object attribute (foo.bar) lookups are actually super slow ! (33% slower)
+# -try out using numpy array for basically all GUI stuff and then update everything each frame. seems to fast enough
+# -maybe try implementing more functions that can use NUMBA to get better speeds
 
 # Import required libraries
 import math
@@ -7,10 +9,11 @@ import queue
 import threading
 import logging
 import time
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageTk
 import tkinter as tk
 from random import randint, shuffle, random, uniform
 import numpy as np
+from numba import jit, jitclass
 
 # Global variables and settings
 botPathColours = [("Red", '#e6194B'), ("Green", '#3cb44b'), ("Yellow", '#ffe119'), ("Blue", '#4363d8'),
@@ -22,8 +25,8 @@ botPathColours = [("Red", '#e6194B'), ("Green", '#3cb44b'), ("Yellow", '#ffe119'
 startCoord = [500, 125]  # (Y, X)
 endCoord = [225, 650]  # (Y, X)
 listOfBots = []
-numberOfBots = 3
-botVisionRadius = 40
+numberOfBots = 20
+botVisionRadius = 30
 botStepSize = 10
 botSlowdown = 0.06
 numberOfDraws = 0
@@ -33,6 +36,7 @@ myThread = None
 numRounds = 0
 maxBotTurnInRads = 0.25
 workingBG = None
+circleQueue = queue.Queue()
 
 class Bot:
     def __init__(self, botNumber):
@@ -42,8 +46,7 @@ class Bot:
         self.y = startCoord[0]
         self.x = startCoord[1]
         self.pathHistory = [(self.y, self.x)]
-        self.pathToBeDrawn = queue.Queue()
-        self.pathToBeCleared = queue.Queue()
+        self.drawingQueue = queue.Queue()
         self.number = botNumber
         self.drawCircle = 0
         self.drawCargo = 0
@@ -66,7 +69,7 @@ class MyThread(threading.Thread):
             with self.pause_cond:
                 while self.paused:
                     self.pause_cond.wait()
-                numRounds += 1
+                # numRounds += 1
                 shuffle(self.bots)
                 for bot in self.bots:
 
@@ -77,112 +80,159 @@ class MyThread(threading.Thread):
                         prevStep = (bot.y, bot.x)
 
                         # Check if bot can see/move to destination
-                        distanceToDestination = math.sqrt((endCoord[0] - bot.y)**2 + (endCoord[1] - bot.x)**2)
+                        distanceToDestination = math.sqrt((endCoord[0] - bot.y) ** 2 + (endCoord[1] - bot.x) ** 2)
                         if distanceToDestination <= botStepSize:
                             yStep = endCoord[0] - bot.y
                             xStep = endCoord[1] - bot.x
                             bot.hasSuccessfulPath = True
                             bot.pathHistoryIndex = len(bot.pathHistory) - 1
                         else:
-                            if distanceToDestination <= botVisionRadius and len(getMovePixels(bot.y, bot.x, endCoord[0], endCoord[1])) != 0:
+                            if distanceToDestination <= botVisionRadius and len(
+                                    self.getMovePixels(bot.y, bot.x, endCoord[0], endCoord[1])) != 0:
                                 # Bot can see destination but can't reach it just yet, so it moves towards it
                                 dy = endCoord[0] - bot.y
                                 dx = endCoord[1] - bot.x
                                 bot.direction = math.atan2(dy, dx)
                                 yStep = round(math.sin(bot.direction) * botStepSize)
                                 xStep = round(math.cos(bot.direction) * botStepSize)
-                                pixelPath = getMovePixels(bot.y, bot.x, bot.y + yStep, bot.x + xStep)
-                            else:
-                                pixelPath = self.generateNextBotCoordinates(bot)
-                                yStep = round(math.sin(bot.direction) * botStepSize)
-                                xStep = round(math.cos(bot.direction) * botStepSize)
 
-                            for i in range(1, len(pixelPath)):
-                                bot.pathHistory.append(pixelPath[i])
+                            else:
+                                yStep, xStep = self.generateNextBotCoordinates(bot)
+
+                        pixelPath = self.getMovePixels(bot.y, bot.x, bot.y + yStep, bot.x + xStep)
+                        for i in range(len(pixelPath)):
+                            bot.pathHistory.append(pixelPath[i])
+                            bot.drawingQueue.put((pixelPath[i]) + (1,))
                         bot.y += yStep
                         bot.x += xStep
-                        bot.pathToBeDrawn.put((prevStep, (bot.y, bot.x)))
+
+
 
                     else:   # Bot has found destination and is transporting cargo
-                        # Check for other bots to communicate with
+                        #TODO ------    Check for other bots to communicate with --------
+                        for otherBot in listOfBots:
+                            if bot.pathRGB != otherBot.pathRGB and (bot.x-otherBot.x)**2 + (bot.y-otherBot.y)**2 < botVisionRadius**2:
+
+                                pass
 
                         # Bot is carrying cargo and is moving towards destination
                         if bot.isCarryingCargo:
-
-                            # -----   Apply smoothing to bot's path as it moves forward  -----
-                            perimeterCoords = set()
-                            for p in self.getPerimeterCoords(bot.x + 1, bot.y):
-                                perimeterCoords.add(p)
-                            for p in self.getPerimeterCoords(bot.x - 1, bot.y):
-                                perimeterCoords.add(p)
-                            for p in self.getPerimeterCoords(bot.x, bot.y + 1):
-                                perimeterCoords.add(p)
-                            for p in self.getPerimeterCoords(bot.x, bot.y - 1):
-                                perimeterCoords.add(p)
+                            # Apply smoothing to bot's path as it moves forward
+                            perimeterCoords = self.getPerimeterCoords(bot.x, bot.y)
                             pointsFoundInHistory = []
                             for point in perimeterCoords:
-                                xPoint = 0 if point[0] < 0 else width-1 if point[0] > width-1 else point[0]
-                                yPoint = 0 if point[1] < 0 else height-1 if point[1] > height-1 else point[1]
+                                xPoint = 0 if point[0] < 0 else width - 1 if point[0] > width - 1 else point[0]
+                                yPoint = 0 if point[1] < 0 else height - 1 if point[1] > height - 1 else point[1]
 
-                                # Make sure the path to the point being examined is valid and not blocked
-                                pathToPointInPixels = getMovePixels(bot.x, bot.y, xPoint, yPoint)
-                                if len(pathToPointInPixels) == 0:
+                                # Disregard point if it's not a valid destination
+                                if impassableTerrainArray[yPoint][xPoint] == 1:
                                     continue
 
                                 # Check if perimeter point is same colour as bot's colour
                                 if np.array_equal(numpyEnvironment[yPoint][xPoint], bot.pathRGB):
 
-                                    # Make sure point isn't back towards the start point (avoids looking forward through entire path history)
-                                    # backTrackIndex = bot.pathHistoryIndex-15 if bot.pathHistoryIndex > 15 else 0
-                                    # if point in bot.pathHistory[backTrackIndex:bot.pathHistoryIndex]:
-                                    #     continue
+                                    # Make sure the path to the point being examined is valid and not blocked
+                                    pathToPointInPixels = self.getMovePixels(bot.y, bot.x, yPoint, xPoint)
+                                    if len(pathToPointInPixels) == 0:
+                                        continue
 
-                                    # Look forward through path history and add perimeter points and their indices (in bot's path history) to a temporary list
+                                    # Make sure point isn't in the wrong direction (avoids looking through entire path history for no reason)
+
+                                    backTrackIndex = int(
+                                        bot.pathHistoryIndex - (1.5 * botStepSize)) if bot.pathHistoryIndex > (
+                                                1.5 * botStepSize) else 0
+                                    if point in bot.pathHistory[backTrackIndex:bot.pathHistoryIndex]:
+                                        continue
+
+                                    # Look through path history in the appropriate direction and add perimeter points and their indices (in bot's path history) to a temporary list
                                     for i in range(bot.pathHistoryIndex, len(bot.pathHistory)):
                                         if bot.pathHistory[i][0] == yPoint and bot.pathHistory[i][1] == xPoint:
                                             pointsFoundInHistory.append((i, yPoint, xPoint))
 
                             # If we have found a viable shortcut, then adjust bot's path history and GUI
                             if len(pointsFoundInHistory) != 0:
-                                logger.info("Unsorted points " + str(pointsFoundInHistory))
                                 # Determine which point provides the best shortcut (the farthest index)
                                 pointsFoundInHistory.sort(key=lambda x: x[0], reverse=True)
-                                logger.info("Sorted points " + str(pointsFoundInHistory))
                                 bestPoint = pointsFoundInHistory[0]
-                                logger.info("Best point " + str(bestPoint))
 
-                                logger.info("Drawing black lines from index" + str(bot.pathHistoryIndex) + " to " + str(bestPoint[0]-1))
+                                # TODO adjust these off by ones to see if it improves "breaks" in path
                                 # Draw black lines over chunk of path that is not part of shortest path
-                                for i in range(bot.pathHistoryIndex, bestPoint[0] - 1):
-                                    bot.pathToBeCleared.put((bot.pathHistory[i], bot.pathHistory[i+1]))
+                                for i in range(bot.pathHistoryIndex, bestPoint[0]):
+                                    bot.drawingQueue.put((bot.pathHistory[i]) + (0,))
 
-                                # Remove chunk of path that is not part of shortest path from bot's path history
-                                # bot.pathHistory = bot.pathHistory[:bot.pathHistoryIndex+1] + bot.pathHistory[bestPoint[0]:]
-                                # del bot.pathHistory[bot.pathHistoryIndex:bestPoint[0]]
+                                # Add the new path to path history and add them lines to be drawn to the queue
+                                newPathPixels = self.getMovePixels(bot.y, bot.x, bestPoint[1], bestPoint[2])
 
-                                #TODO Add the new path to path history and add them lines to be drawn to the queue
-                                newPathPixels = getMovePixels(bot.y, bot.x, bestPoint[1], bestPoint[2])
                                 bot.pathHistory = bot.pathHistory[:bot.pathHistoryIndex] + newPathPixels + bot.pathHistory[bestPoint[0]:]
-                                bot.pathToBeDrawn.put((bot.pathHistory[bot.pathHistoryIndex], (bestPoint[1], bestPoint[2])))
-
-                            else:
-                                logger.info("No viable")
+                                for point in newPathPixels:
+                                    bot.drawingQueue.put(point + (1,))
 
                             # Go forward through path history
                             bot.pathHistoryIndex += botStepSize
                             if bot.pathHistoryIndex >= len(bot.pathHistory):
                                 bot.pathHistoryIndex = len(bot.pathHistory) - 1
                                 bot.isCarryingCargo = False
-
                             bot.y = bot.pathHistory[bot.pathHistoryIndex][0]
                             bot.x = bot.pathHistory[bot.pathHistoryIndex][1]
+
+
+
+
+                        # Bot is not carrying cargo and is heading back to start
                         else:
+                            # Apply smoothing to bot's path as it moves backwards
+                            perimeterCoords = self.getPerimeterCoords(bot.x, bot.y)
+                            pointsFoundInHistory = []
+                            for point in perimeterCoords:
+                                xPoint = 0 if point[0] < 0 else width - 1 if point[0] > width - 1 else point[0]
+                                yPoint = 0 if point[1] < 0 else height - 1 if point[1] > height - 1 else point[1]
+
+                                # Disregard point if it's not a valid destination
+                                if impassableTerrainArray[yPoint][xPoint] == 1:
+                                    continue
+
+                                # Check if perimeter point is same colour as bot's colour
+                                if np.array_equal(numpyEnvironment[yPoint][xPoint], bot.pathRGB):
+
+                                    # Make sure the path to the point being examined is valid and not blocked
+                                    pathToPointInPixels = self.getMovePixels(bot.y, bot.x, yPoint, xPoint)
+                                    if len(pathToPointInPixels) == 0:
+                                        continue
+
+                                    # Make sure point isn't in the wrong direction (avoids looking through entire path history for no reason)
+
+                                    backTrackIndex = int(bot.pathHistoryIndex + (1.5 * botStepSize)) if bot.pathHistoryIndex + (1.5 * botStepSize) < len(bot.pathHistory) else len(bot.pathHistory)-1
+                                    if point in bot.pathHistory[bot.pathHistoryIndex:backTrackIndex+1]:
+                                        continue
+
+                                    # Look through path history in the appropriate direction and add perimeter points and their indices (in bot's path history) to a temporary list
+                                    for i in range(bot.pathHistoryIndex, 0, -1):
+                                        if bot.pathHistory[i][0] == yPoint and bot.pathHistory[i][1] == xPoint:
+                                            pointsFoundInHistory.append((i, yPoint, xPoint))
+
+                            # If we have found a viable shortcut, then adjust bot's path history and GUI
+                            if len(pointsFoundInHistory) != 0:
+                                # Determine which point provides the best shortcut (the farthest index)
+                                pointsFoundInHistory.sort(key=lambda x: x[0])
+                                bestPoint = pointsFoundInHistory[0]
+
+                                # Draw black lines over chunk of path that is not part of shortest path
+                                for i in range(bot.pathHistoryIndex, bestPoint[0], -1):
+                                    bot.drawingQueue.put((bot.pathHistory[i]) + (0,))
+
+                                # Add the new path to path history and add the lines to be drawn to the queue
+                                newPathPixels = self.getMovePixels(bestPoint[1], bestPoint[2], bot.y, bot.x)
+
+                                bot.pathHistory = bot.pathHistory[:bestPoint[0]] + newPathPixels + bot.pathHistory[bot.pathHistoryIndex:]
+                                bot.pathHistoryIndex = bot.pathHistoryIndex - (bot.pathHistoryIndex - bestPoint[0]) + len(newPathPixels)
+                                for point in newPathPixels:
+                                    bot.drawingQueue.put(point + (1,))
+
                             # Go backwards through path history
                             bot.pathHistoryIndex -= botStepSize
                             if bot.pathHistoryIndex < 0:
                                 bot.pathHistoryIndex = 0
                                 bot.isCarryingCargo = True
-
                             bot.y = bot.pathHistory[bot.pathHistoryIndex][0]
                             bot.x = bot.pathHistory[bot.pathHistoryIndex][1]
 
@@ -205,20 +255,21 @@ class MyThread(threading.Thread):
             newDirection = bot.direction + uniform(-maxRadians, maxRadians)
             yStep = round(math.sin(newDirection) * botStepSize)
             xStep = round(math.cos(newDirection) * botStepSize)
-            botPathAsPixels = getMovePixels(bot.y, bot.x, bot.y + yStep, bot.x + xStep)
+            botPathAsPixels = self.getMovePixels(bot.y, bot.x, bot.y + yStep, bot.x + xStep)
             if len(botPathAsPixels) != 0:
                 bot.direction = newDirection
                 break
             failedAttempts += 1
-        return botPathAsPixels
+        return yStep, xStep
 
     # Function implemented with the help of https://www.geeksforgeeks.org/mid-point-circle-drawing-algorithm/
     # Gets the pixel coordinates of the perimeter of a circle. Much faster than looping with degrees/radians
+    # ******************* RETURNS COORDINATES IN X,Y FORMAT ***************************
     def getPerimeterCoords(self, xOffset, yOffset):
-        pointsAlongCircle = [(yOffset - botVisionRadius, xOffset),
-                             (yOffset, xOffset + botVisionRadius),
-                             (yOffset + botVisionRadius, xOffset),
-                             (yOffset, xOffset - botVisionRadius)]
+        pointsAlongCircle = [(xOffset, yOffset - botVisionRadius),
+                             (xOffset + botVisionRadius, yOffset),
+                             (xOffset, yOffset + botVisionRadius),
+                             (xOffset - botVisionRadius, yOffset)]
         x = botVisionRadius
         y = 0
         P = 1 - botVisionRadius
@@ -244,86 +295,135 @@ class MyThread(threading.Thread):
                 pointsAlongCircle.append((-y + xOffset, -x + yOffset))
         return pointsAlongCircle
 
-# Function implemented with the help of http://www.roguebasin.com/index.php?title=Bresenham%27s_Line_Algorithm
-# Checks each point in a line to ensure a bot doesn't "jump" over an illegal area
+    @jit(nopython=True)
+    def applyPathSmoothing(self, bot, direction):
+        perimeterCoords = self.getPerimeterCoords(bot.x, bot.y)
+        pointsFoundInHistory = []
+        for point in perimeterCoords:
+            xPoint = 0 if point[0] < 0 else width - 1 if point[0] > width - 1 else point[0]
+            yPoint = 0 if point[1] < 0 else height - 1 if point[1] > height - 1 else point[1]
 
-def getMovePixels(currentY, currentX, futureY, futureX):
-    if (0 <= futureY < height) and (0 <= futureX < width):
+            # Disregard point if it's not a valid destination
+            if impassableTerrainArray[yPoint][xPoint] == 1:
+                continue
 
-        # If line is steeper than 45 degrees, then swap x and y to rotate the line
-        lineIsSteep = abs(futureY - currentY) > abs(futureX - currentX)
-        if lineIsSteep:
-            currentX, currentY = currentY, currentX
-            futureX, futureY = futureY, futureX
+            # Check if perimeter point is same colour as bot's colour
+            if np.array_equal(numpyEnvironment[yPoint][xPoint], bot.pathRGB):
 
-        # If end point is to the left of start point, then swap start and end points
-        startEndSwapped = False
-        if currentX > futureX:
-            currentX, futureX = futureX, currentX
-            currentY, futureY = futureY, currentY
-            startEndSwapped = True
+                # Make sure the path to the point being examined is valid and not blocked
+                pathToPointInPixels = self.getMovePixels(bot.y, bot.x, yPoint, xPoint)
+                if len(pathToPointInPixels) == 0:
+                    continue
 
-        # Calculate differences, error, and yStep
-        dx = futureX - currentX
-        dy = futureY - currentY
-        e = int(dx / 2.0)
-        if currentY < futureY:
-            yStep = 1
+                # Make sure point isn't in the wrong direction (avoids looking through entire path history for no reason)
+                if direction == 'forward':
+                    backTrackIndex = int(bot.pathHistoryIndex - (1.5*botStepSize)) if bot.pathHistoryIndex > (1.5*botStepSize) else 0
+                    if point in bot.pathHistory[backTrackIndex:bot.pathHistoryIndex]:
+                        continue
+                else:
+                    backTrackIndex = int(bot.pathHistoryIndex + (1.5*botStepSize)) if bot.pathHistoryIndex < len(bot.pathHistory) - (1.5*botStepSize) else len(bot.pathHistory)
+                    if point in bot.pathHistory[bot.pathHistoryIndex:backTrackIndex]:
+                        continue
+
+                # Look through path history in the appropriate direction and add perimeter points and their indices (in bot's path history) to a temporary list
+                start = bot.pathHistoryIndex
+                stop = len(bot.pathHistory) if direction == 'forward' else 0
+                step = 1 if direction == 'forward' else -1
+                for i in range(start, stop, step):
+                    if bot.pathHistory[i][0] == yPoint and bot.pathHistory[i][1] == xPoint:
+                        pointsFoundInHistory.append((i, yPoint, xPoint))
+
+        # If we have found a viable shortcut, then adjust bot's path history and GUI
+        if len(pointsFoundInHistory) != 0:
+            # Determine which point provides the best shortcut (the farthest index)
+            if direction == 'forward':
+                pointsFoundInHistory.sort(key=lambda x: x[0], reverse=True)
+            else:
+                pointsFoundInHistory.sort(key=lambda x: x[0])
+            bestPoint = pointsFoundInHistory[0]
+
+            # TODO adjust these off by ones to see if it improves "breaks" in path
+            # Draw black lines over chunk of path that is not part of shortest path
+            start = bot.pathHistoryIndex
+            stop = bestPoint[0] - 1 if direction == 'forward' else bestPoint[0] + 1 #These 'ones' ensure we don't go past either end of pathHistory
+            step = 1 if direction == 'forward' else -1
+            for i in range(bot.pathHistoryIndex, stop, step):
+                if direction == 'forward':
+                    bot.pathToBeCleared.put((bot.pathHistory[i], bot.pathHistory[i + 1]))
+                else:
+                    bot.pathToBeCleared.put((bot.pathHistory[i], bot.pathHistory[i - 1]))
+
+            # Add the new path to path history and add them lines to be drawn to the queue
+            newPathPixels = self.getMovePixels(bot.y, bot.x, bestPoint[1], bestPoint[2])
+            if direction == 'forward':
+                bot.pathHistory = bot.pathHistory[:bot.pathHistoryIndex] + newPathPixels + bot.pathHistory[bestPoint[0]:]
+            else:
+                bot.pathHistory = bot.pathHistory[:bestPoint[0]+1] + newPathPixels + bot.pathHistory[bot.pathHistoryIndex:]
+                bot.pathHistoryIndex = bot.pathHistoryIndex - (bot.pathHistoryIndex - bestPoint[0]) + len(newPathPixels)
+
+            bot.pathToBeDrawn.put((bot.pathHistory[bot.pathHistoryIndex], (bestPoint[1], bestPoint[2])))
+
         else:
-            yStep = -1
+            logger.info("No viable")
 
-        y = currentY
-        coordList = []
-        for x in range(currentX, futureX + 1):
-            coords = (x, y)
+    # Function implemented with the help of http://www.roguebasin.com/index.php?title=Bresenham%27s_Line_Algorithm
+    # Checks each point in a line to ensure a bot doesn't "jump" over an illegal area
+    @staticmethod
+    def getMovePixels(currentY, currentX, futureY, futureX):
+        if (0 <= futureY < height) and (0 <= futureX < width):
+
+            # If line is steeper than 45 degrees, then swap x and y to rotate the line
+            lineIsSteep = abs(futureY - currentY) > abs(futureX - currentX)
             if lineIsSteep:
-                coords = (y, x)
-            coordList.append((coords[1], coords[0]))
-            if impassableTerrainArray[coords[1]][coords[0]] == 1:
-                return []
-            e -= abs(dy)
-            if e < 0:
-                y += yStep
-                e += dx
-        if startEndSwapped:
-            coordList.reverse()
-        return coordList
+                currentX, currentY = currentY, currentX
+                futureX, futureY = futureY, futureX
 
-    else:
-        return []
+            # If end point is to the left of start point, then swap start and end points
+            startEndSwapped = False
+            if currentX > futureX:
+                currentX, futureX = futureX, currentX
+                currentY, futureY = futureY, currentY
+                startEndSwapped = True
 
-def updateGUI(w, bots, startEndLines):
-    global numberOfDraws
+            # Calculate differences, error, and yStep
+            dx = futureX - currentX
+            dy = futureY - currentY
+            e = int(dx / 2.0)
+            if currentY < futureY:
+                yStep = 1
+            else:
+                yStep = -1
+
+            y = currentY
+            coordList = []
+            for x in range(currentX, futureX + 1):
+                coords = (x, y)
+                if lineIsSteep:
+                    coords = (y, x)
+                coordList.append((coords[1], coords[0]))
+                if impassableTerrainArray[coords[1]][coords[0]] == 1:
+                    return []
+                e -= abs(dy)
+                if e < 0:
+                    y += yStep
+                    e += dx
+            if startEndSwapped:
+                coordList.reverse()
+            return coordList
+
+        else:
+            return []
+
+def updateGUI(w, bots, startEndLines, numpyEnvironment):
     for bot in bots:
-
-        while not bot.pathToBeCleared.empty():
-            point = bot.pathToBeCleared.get()
-            start = point[0]
-            end = point [1]
-
-            w.create_line(start[1], start[0], end[1], end[0], fill='#000000')
-
-
-            # pathInPixels =
-            for x in range(bot.pathHistoryIndex, len(bot.pathHistory)): #TODO problem with this loop. erases too much
-                numpyEnvironment[bot.pathHistory[x][0]][bot.pathHistory[x][1]] = [0, 0, 0, 255]
-                if bot.pathHistory[x][0] == end[0] and bot.pathHistory[x][1] == end[1]:
-                    break
-            numberOfDraws += 1
-
-        while not bot.pathToBeDrawn.empty():
-            points = bot.pathToBeDrawn.get()
-            start = points[0]
-            end = points[1]
-
-            # Draw line on tkinter canvas
-            w.create_line(start[1], start[0], end[1], end[0], fill=bot.pathHex)
-
-            for x in range(len(bot.pathHistory) - 1, 0, -1):
-                numpyEnvironment[bot.pathHistory[x][0]][bot.pathHistory[x][1]] = bot.pathRGB
-                if bot.pathHistory[x][0] == start[0] and bot.pathHistory[x][1] == start[1]:
-                    break
-            numberOfDraws += 1
+        q = bot.drawingQueue
+        rgb = bot.pathRGB
+        while not q.empty():
+            p = q.get()
+            if p[2] == 0:
+                numpyEnvironment[p[0]][p[1]] = [0, 0, 0, 255]
+            else:
+                numpyEnvironment[p[0]][p[1]] = rgb
 
     for line in startEndLines:
         w.delete(line)
@@ -332,12 +432,13 @@ def updateGUI(w, bots, startEndLines):
     for bot in bots:
         w.delete(bot.drawCircle)
         bot.drawCircle = w.create_oval(bot.x - botDrawRadius,  bot.y - botDrawRadius, bot.x + botDrawRadius, bot.y + botDrawRadius, fill=bot.pathHex, outline=bot.pathHex)
-        numberOfDraws += 1
         if bot.isCarryingCargo:
             w.delete(bot.drawCargo)
             bot.drawCargo = w.create_rectangle(bot.x - botDrawRadius - 2, bot.y - (1.5 * botDrawRadius), bot.x + botDrawRadius + 2, bot.y - (0.5 * botDrawRadius), fill='gray78', outline='gray78')
-            numberOfDraws += 1
+
     w.pack()
+
+
 
 def drawStartEndLines(w):
     half = 15
@@ -423,14 +524,12 @@ if __name__ == "__main__":
 
     startEndLines = drawStartEndLines(window)
 
-    # Main GUI loop. Save and reload image periodically to keep tkinter from slowing down
+    # Main loop. Save and reload image periodically to keep tkinter from slowing down
     while True:
-        updateGUI(window, listOfBots, startEndLines)
+        # startTime = time.time()
+        updateGUI(window, listOfBots, startEndLines, numpyEnvironment)
         window.update()
-
-        if numberOfDraws > 1000:
-            window.delete("all")
-            startEndLines = drawStartEndLines(window)
-            workingImage = ImageTk.PhotoImage(Image.fromarray(numpyEnvironment))
-            window.create_image(0, 0, anchor=tk.N + tk.W, image=workingImage)
-            numberOfDraws = 0
+        window.delete("all")
+        workingImage = ImageTk.PhotoImage(Image.fromarray(numpyEnvironment))
+        window.create_image(0, 0, anchor=tk.N + tk.W, image=workingImage)
+        # print("Time taken for entire update", time.time() - startTime)
