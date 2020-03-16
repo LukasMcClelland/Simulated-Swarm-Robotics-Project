@@ -5,7 +5,6 @@
 
 # Import required libraries
 import math
-import queue
 import threading
 import logging
 import time
@@ -13,7 +12,7 @@ from PIL import Image, ImageTk
 import tkinter as tk
 from random import randint, shuffle, random, uniform
 import numpy as np
-from numba import jit, jitclass
+from numba import jit
 
 # Global variables and settings
 botPathColours = [("Red", '#e6194B'), ("Green", '#3cb44b'), ("Yellow", '#ffe119'), ("Blue", '#4363d8'),
@@ -25,10 +24,10 @@ botPathColours = [("Red", '#e6194B'), ("Green", '#3cb44b'), ("Yellow", '#ffe119'
 startCoord = [500, 125]  # (Y, X)
 endCoord = [225, 650]  # (Y, X)
 listOfBots = []
-numberOfBots = 20
-botVisionRadius = 30
+numberOfBots = 10
+botVisionRadius = 50
 botStepSize = 10
-botSlowdown = 0.06
+botSlowdown = 0.05
 numberOfDraws = 0
 botDrawRadius = 5
 paused = False
@@ -36,17 +35,16 @@ myThread = None
 numRounds = 0
 maxBotTurnInRads = 0.25
 workingBG = None
-circleQueue = queue.Queue()
+intersectionsDict = dict()
+circles = []
 
 class Bot:
     def __init__(self, botNumber):
-        # self.colour = botPathColours[randint(0, len(botPathColours) - 1)]
         self.pathRGB = np.array([randint(50, 255), randint(50, 255), randint(50, 255), 255])
         self.pathHex = "#" + str(hex(self.pathRGB[0]))[2:] + str(hex(self.pathRGB[1]))[2:] + str(hex(self.pathRGB[2]))[2:]
         self.y = startCoord[0]
         self.x = startCoord[1]
         self.pathHistory = [(self.y, self.x)]
-        self.drawingQueue = queue.Queue()
         self.number = botNumber
         self.drawCircle = 0
         self.drawCargo = 0
@@ -54,6 +52,8 @@ class Bot:
         self.isCarryingCargo = False
         self.pathHistoryIndex = 0
         self.direction = 2 * math.pi * random()
+        self.intersections = list()
+        self.recentlySeenBots = list()
 
 class MyThread(threading.Thread):
     def __init__(self, listOfBots):
@@ -69,11 +69,9 @@ class MyThread(threading.Thread):
             with self.pause_cond:
                 while self.paused:
                     self.pause_cond.wait()
-                # numRounds += 1
                 shuffle(self.bots)
                 for bot in self.bots:
-
-                    # *****  LOGIC FOR EACH BOT STEP GOES HERE *****
+                    # *****  LOGIC FOR EACH BOT STEP STARTS HERE *****
 
                     if not bot.hasSuccessfulPath:  # Bot is looking for destination
                         # Log current position
@@ -99,10 +97,23 @@ class MyThread(threading.Thread):
                             else:
                                 yStep, xStep = self.generateNextBotCoordinates(bot)
 
+                        # Check for intersections along new part of path and handle appropriately
                         pixelPath = self.getMovePixels(bot.y, bot.x, bot.y + yStep, bot.x + xStep)
+                        pathRGBAsList = bot.pathRGB[:3].tolist()
                         for i in range(len(pixelPath)):
+                            pointColour = numpyEnvironment[pixelPath[i][0]][pixelPath[i][1]][:3].tolist()
+                            if pointColour != [0, 0, 0] and pointColour != pathRGBAsList:
+                                bot.intersections.append((pixelPath[i][0], pixelPath[i][1]))
+                                pointHistory = intersectionsDict.get((pixelPath[i][0], pixelPath[i][1]))
+                                if pointHistory is None:
+                                    intersectionsDict[(pixelPath[i][0], pixelPath[i][1])] = [pointColour, pathRGBAsList]
+                                else:
+                                    if pathRGBAsList not in intersectionsDict[(pixelPath[i][0], pixelPath[i][1])]:
+                                        intersectionsDict[(pixelPath[i][0], pixelPath[i][1])].append(pathRGBAsList)
                             bot.pathHistory.append(pixelPath[i])
-                            bot.drawingQueue.put((pixelPath[i]) + (1,))
+                            numpyEnvironment[pixelPath[i][0]][pixelPath[i][1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
+
+                        # Move bot
                         bot.y += yStep
                         bot.x += xStep
 
@@ -111,9 +122,53 @@ class MyThread(threading.Thread):
                     else:   # Bot has found destination and is transporting cargo
                         #TODO ------    Check for other bots to communicate with --------
                         for otherBot in listOfBots:
-                            if bot.pathRGB != otherBot.pathRGB and (bot.x-otherBot.x)**2 + (bot.y-otherBot.y)**2 < botVisionRadius**2:
+                            if not (bot.pathRGB == otherBot.pathRGB).all(): # If other bot is not same bot
+                                if (bot.x-otherBot.x)**2 + (bot.y-otherBot.y)**2 < botVisionRadius**2: #If other bot within vision range
+                                    if otherBot.pathRGB.tolist() not in bot.recentlySeenBots:
+                                        bot.recentlySeenBots.append(otherBot.pathRGB.tolist())
+                                        otherBot.recentlySeenBots.append(bot.pathRGB.tolist())
+                                        # EXCHANGE PATH INFO HERE
 
-                                pass
+                                        # Both bots have a successful path, so find intersections and optimize both paths
+
+                                        # Find the intersections
+                                        sharedPoints = set()
+                                        for point in bot.intersections:
+                                            try:
+                                                if otherBot.pathRGB[:3].tolist() in intersectionsDict[point]:
+                                                    sharedPoints.add(point)
+                                                    circles.append(point)
+                                            except KeyError: pass
+                                        for point in otherBot.intersections:
+                                            try:
+                                                if bot.pathRGB[:3].tolist() in intersectionsDict[point]:
+                                                    sharedPoints.add(point)
+                                                    circles.append(point)
+                                            except KeyError: pass
+                                        time.sleep(2)
+                                        circles.clear()
+
+
+
+                                        if not bot.hasSuccessfulPath or not otherBot.hasSuccessfulPath:
+                                            #TODO exchange info between bots if one bot does not know of a successful path
+                                            pass
+
+
+
+                                else: # Other bot is out of range, so make sure it's removed from recently seen list
+                                    # TODO maybe add a counter so that bots don't go in, go out, go in, go out, etc every turn
+                                    # something like a "if we've seen each other in the last 10 moves or so"
+                                    try:
+                                        bot.recentlySeenBots.remove(otherBot.pathRGB.tolist())
+                                    except ValueError:
+                                        pass
+
+                                    try:
+                                        otherBot.recentlySeenBots.remove(bot.pathRGB.tolist)
+                                    except ValueError:
+                                        pass
+
 
                         # Bot is carrying cargo and is moving towards destination
                         if bot.isCarryingCargo:
@@ -137,10 +192,7 @@ class MyThread(threading.Thread):
                                         continue
 
                                     # Make sure point isn't in the wrong direction (avoids looking through entire path history for no reason)
-
-                                    backTrackIndex = int(
-                                        bot.pathHistoryIndex - (1.5 * botStepSize)) if bot.pathHistoryIndex > (
-                                                1.5 * botStepSize) else 0
+                                    backTrackIndex = int(bot.pathHistoryIndex - (1.5 * botStepSize)) if bot.pathHistoryIndex > (1.5 * botStepSize) else 0
                                     if point in bot.pathHistory[backTrackIndex:bot.pathHistoryIndex]:
                                         continue
 
@@ -154,18 +206,50 @@ class MyThread(threading.Thread):
                                 # Determine which point provides the best shortcut (the farthest index)
                                 pointsFoundInHistory.sort(key=lambda x: x[0], reverse=True)
                                 bestPoint = pointsFoundInHistory[0]
+                                pathRGBAsList = bot.pathRGB[:3].tolist()
 
-                                # TODO adjust these off by ones to see if it improves "breaks" in path
                                 # Draw black lines over chunk of path that is not part of shortest path
+                                # Remove intersections from appropriate coords in outdated path history (no longer intersections there)
+                                # Draw the colour of path that was there before, if applicable
                                 for i in range(bot.pathHistoryIndex, bestPoint[0]):
-                                    bot.drawingQueue.put((bot.pathHistory[i]) + (0,))
+                                    numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = [0, 0, 0, 255]
+                                    # Remove point from intersection dictionary
+                                    try:
+                                        intersectionsDict[bot.pathHistory[i]].remove(pathRGBAsList)
+                                        prevCol = intersectionsDict[bot.pathHistory[i]][len(intersectionsDict[bot.pathHistory[i]]) - 1]
+                                        numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = [prevCol[0], prevCol[1],prevCol[2], 255]
+                                        if len(intersectionsDict[bot.pathHistory[i]]) < 2:
+                                            del intersectionsDict[bot.pathHistory[i]]
+                                    except ValueError:
+                                        pass
+                                    except KeyError:
+                                        pass
+                                    # Remove point from bot's intersections list
+                                    try:
+                                        # bot.intersections.remove(bot.pathHistory[i])
+                                        bot.intersections = [x for x in bot.intersections if x[:2] != bot.pathHistory[i]]
+                                    except ValueError:
+                                        pass
 
-                                # Add the new path to path history and add them lines to be drawn to the queue
+
+
+                                # Check for intersections along updated path section and handle appropriately
                                 newPathPixels = self.getMovePixels(bot.y, bot.x, bestPoint[1], bestPoint[2])
+                                for i in range(len(newPathPixels)):
+                                    pointColour = numpyEnvironment[newPathPixels[i][0]][newPathPixels[i][1]][:3].tolist()
+                                    if pointColour != [0, 0, 0] and pointColour != pathRGBAsList:
+                                        bot.intersections.append((newPathPixels[i][0], newPathPixels[i][1], bot.pathHistoryIndex+i))
+                                        pointHistory = intersectionsDict.get((newPathPixels[i][0], newPathPixels[i][1]))
+                                        if pointHistory is None or len(pointHistory) == 0:
+                                            intersectionsDict[(newPathPixels[i][0], newPathPixels[i][1])] = [pointColour, pathRGBAsList]
+                                        else:
+                                            intersectionsDict[(newPathPixels[i][0], newPathPixels[i][1])].append(pathRGBAsList)
 
+                                # Add the new path to path history and add the lines to be drawn to the queue
                                 bot.pathHistory = bot.pathHistory[:bot.pathHistoryIndex] + newPathPixels + bot.pathHistory[bestPoint[0]:]
                                 for point in newPathPixels:
-                                    bot.drawingQueue.put(point + (1,))
+                                    numpyEnvironment[point[0]][point[1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
+
 
                             # Go forward through path history
                             bot.pathHistoryIndex += botStepSize
@@ -215,18 +299,47 @@ class MyThread(threading.Thread):
                                 # Determine which point provides the best shortcut (the farthest index)
                                 pointsFoundInHistory.sort(key=lambda x: x[0])
                                 bestPoint = pointsFoundInHistory[0]
+                                pathRGBAsList = bot.pathRGB[:3].tolist()
 
                                 # Draw black lines over chunk of path that is not part of shortest path
-                                for i in range(bot.pathHistoryIndex, bestPoint[0], -1):
-                                    bot.drawingQueue.put((bot.pathHistory[i]) + (0,))
+                                for i in range(bot.pathHistoryIndex-1, bestPoint[0]-1, -1):
+                                    numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = [0, 0, 0, 255]
+                                    # Remove point from intersection dictionary
+                                    try:
+                                        intersectionsDict[bot.pathHistory[i]].remove(pathRGBAsList)
+                                        prevCol = intersectionsDict[bot.pathHistory[i]][len(intersectionsDict[bot.pathHistory[i]]) - 1]
+                                        numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = [prevCol[0], prevCol[1], prevCol[2], 255]
+
+                                        if len(intersectionsDict[bot.pathHistory[i]]) < 2:
+                                            del intersectionsDict[bot.pathHistory[i]]
+                                    except ValueError:
+                                        pass
+                                    except KeyError:
+                                        pass
+                                    # Remove point from bot's intersections list
+                                    try:
+                                        # bot.intersections.remove(bot.pathHistory[i])
+                                        bot.intersections = [x for x in bot.intersections if x[:2] != bot.pathHistory[i]]
+                                    except ValueError:
+                                        pass
+
 
                                 # Add the new path to path history and add the lines to be drawn to the queue
                                 newPathPixels = self.getMovePixels(bestPoint[1], bestPoint[2], bot.y, bot.x)
+                                for i in range(len(newPathPixels)):
+                                    pointColour = numpyEnvironment[newPathPixels[i][0]][newPathPixels[i][1]][:3].tolist()
+                                    if pointColour != [0, 0, 0] and pointColour != pathRGBAsList:
+                                        bot.intersections.append((newPathPixels[i][0], newPathPixels[i][1], bot.pathHistoryIndex-i))
+                                        pointHistory = intersectionsDict.get((newPathPixels[i][0], newPathPixels[i][1]))
+                                        if pointHistory is None or len(pointHistory) == 0:
+                                            intersectionsDict[(newPathPixels[i][0], newPathPixels[i][1])] = [pointColour, pathRGBAsList]
+                                        else:
+                                            intersectionsDict[(newPathPixels[i][0], newPathPixels[i][1])].append(pathRGBAsList)
 
                                 bot.pathHistory = bot.pathHistory[:bestPoint[0]] + newPathPixels + bot.pathHistory[bot.pathHistoryIndex:]
                                 bot.pathHistoryIndex = bot.pathHistoryIndex - (bot.pathHistoryIndex - bestPoint[0]) + len(newPathPixels)
                                 for point in newPathPixels:
-                                    bot.drawingQueue.put(point + (1,))
+                                    numpyEnvironment[point[0]][point[1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
 
                             # Go backwards through path history
                             bot.pathHistoryIndex -= botStepSize
@@ -414,29 +527,21 @@ class MyThread(threading.Thread):
         else:
             return []
 
-def updateGUI(w, bots, startEndLines, numpyEnvironment):
-    for bot in bots:
-        q = bot.drawingQueue
-        rgb = bot.pathRGB
-        while not q.empty():
-            p = q.get()
-            if p[2] == 0:
-                numpyEnvironment[p[0]][p[1]] = [0, 0, 0, 255]
-            else:
-                numpyEnvironment[p[0]][p[1]] = rgb
-
-    for line in startEndLines:
-        w.delete(line)
-    startEndLines = drawStartEndLines(w)
-
-    for bot in bots:
-        w.delete(bot.drawCircle)
-        bot.drawCircle = w.create_oval(bot.x - botDrawRadius,  bot.y - botDrawRadius, bot.x + botDrawRadius, bot.y + botDrawRadius, fill=bot.pathHex, outline=bot.pathHex)
-        if bot.isCarryingCargo:
-            w.delete(bot.drawCargo)
-            bot.drawCargo = w.create_rectangle(bot.x - botDrawRadius - 2, bot.y - (1.5 * botDrawRadius), bot.x + botDrawRadius + 2, bot.y - (0.5 * botDrawRadius), fill='gray78', outline='gray78')
-
-    w.pack()
+# def updateGUI(w, bots, startEndLines, numpyEnvironment):
+#     for line in startEndLines:
+#         w.delete(line)
+#     startEndLines = drawStartEndLines(w)
+#
+#     for bot in bots:
+#         w.delete(bot.drawCircle)
+#         bot.drawCircle = w.create_oval(bot.x - botDrawRadius,  bot.y - botDrawRadius, bot.x + botDrawRadius, bot.y + botDrawRadius, fill=bot.pathHex, outline=bot.pathHex)
+#         if bot.isCarryingCargo:
+#             w.delete(bot.drawCargo)
+#             bot.drawCargo = w.create_rectangle(bot.x - botDrawRadius - 2, bot.y - (1.5 * botDrawRadius), bot.x + botDrawRadius + 2, bot.y - (0.5 * botDrawRadius), fill='gray78', outline='gray78')
+#
+#     for c in circles:
+#         w.create_oval
+#     w.pack()
 
 
 
@@ -448,7 +553,7 @@ def drawStartEndLines(w):
     end2 = w.create_line(endCoord[1] + half, endCoord[0] - half, endCoord[1] - half, endCoord[0] + half, fill='#e6194B', width=4)
     return [start1, start2, end1, end2]
 
-def clickCallback(event):
+def pauseButton():
     global paused
     if not paused:
         paused = True
@@ -484,10 +589,12 @@ if __name__ == "__main__":
     bottomFrame = tk.Frame(root)
     bottomFrame.pack(side=tk.BOTTOM)
     slowButton = tk.Button(root, text="Slow down", width=10, height=1, command=slowerButton)
+    pauseButton = tk.Button(root, text='Pause/Unpause', width=15, height=1, command=pauseButton)
     fastButton = tk.Button(root, text="Speed up", width=10, height=1, command=fasterButton)
     slowButton.pack(in_=bottomFrame, side=tk.LEFT)
+    pauseButton.pack(in_=bottomFrame, side=tk.LEFT)
     fastButton.pack(in_=bottomFrame, side=tk.LEFT)
-    window.bind("<Button-1>", clickCallback)
+    # window.bind("<Button-1>", clickCallback)
     window.create_image(0, 0, anchor=tk.N + tk.W, image=backgroundImage)
 
     # Make a matrix for calculating where bots can and can't go (0 is free space, 1 is impassable terrain)
@@ -527,9 +634,26 @@ if __name__ == "__main__":
     # Main loop. Save and reload image periodically to keep tkinter from slowing down
     while True:
         # startTime = time.time()
-        updateGUI(window, listOfBots, startEndLines, numpyEnvironment)
-        window.update()
         window.delete("all")
         workingImage = ImageTk.PhotoImage(Image.fromarray(numpyEnvironment))
         window.create_image(0, 0, anchor=tk.N + tk.W, image=workingImage)
+        for line in startEndLines:
+            window.delete(line)
+        startEndLines = drawStartEndLines(window)
+
+        for bot in listOfBots:
+            window.delete(bot.drawCircle)
+            bot.drawCircle = window.create_oval(bot.x - botDrawRadius, bot.y - botDrawRadius, bot.x + botDrawRadius,
+                                           bot.y + botDrawRadius, fill=bot.pathHex, outline=bot.pathHex)
+            if bot.isCarryingCargo:
+                window.delete(bot.drawCargo)
+                bot.drawCargo = window.create_rectangle(bot.x - botDrawRadius - 2, bot.y - (1.5 * botDrawRadius),
+                                                   bot.x + botDrawRadius + 2, bot.y - (0.5 * botDrawRadius),
+                                                   fill='gray78', outline='gray78')
+        for c in circles:
+            window.create_oval(c[1] - botDrawRadius, c[0] - botDrawRadius, c[1] + botDrawRadius,
+                                           c[0] + botDrawRadius, fill='white', outline='white')
+
+        window.pack()
+        window.update()
         # print("Time taken for entire update", time.time() - startTime)
