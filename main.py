@@ -558,6 +558,7 @@ def compareAndUpdatePaths(bot, otherBot):
                 # circles.append(point)
         except KeyError:
             pass
+
     intersectionsInBotHistory = [x for x in bot.pathHistory if x in sharedIntersections]
     intersectionsInOtherBotsHistory = [x for x in otherBot.pathHistory if x in sharedIntersections]
     sharedPoints = [x for x in intersectionsInBotHistory if x in intersectionsInOtherBotsHistory]
