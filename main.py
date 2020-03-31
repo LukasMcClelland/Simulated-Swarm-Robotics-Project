@@ -14,12 +14,13 @@ from random import randint, shuffle, random, uniform
 import numpy as np
 from numba import jit
 
+highlightMode = True
 
 # Global variables and settings
 startCoord = [500, 125]  # (Y, X)
 endCoord = [225, 650]  # (Y, X)
 listOfBots = []
-numberOfBots = 4
+numberOfBots = 10
 botVisionRadius = 100
 botStepSize = 10
 botSlowdown = 0.05
@@ -65,8 +66,11 @@ class MyThread(threading.Thread):
                 while self.paused:
                     self.pause_cond.wait()
                 shuffle(self.bots)
+
                 for bot in self.bots:
-                    # *****  LOGIC FOR EACH BOT STEP STARTS HERE *****
+                    #      ------------------------------
+                    #          Search for destination
+                    #      ------------------------------
 
                     if not bot.hasSuccessfulPath:  # Bot is looking for destination
                         # Log current position
@@ -78,7 +82,7 @@ class MyThread(threading.Thread):
                             yStep = endCoord[0] - bot.y
                             xStep = endCoord[1] - bot.x
                             bot.hasSuccessfulPath = True
-                            bot.pathHistoryIndex = len(bot.pathHistory) - 1
+
                         else:
                             if distanceToDestination <= botVisionRadius and len(
                                     self.getMovePixels(bot.y, bot.x, endCoord[0], endCoord[1])) != 0:
@@ -94,19 +98,11 @@ class MyThread(threading.Thread):
 
                         # Check for intersections along new part of path and handle appropriately
                         pixelPath = self.getMovePixels(bot.y, bot.x, bot.y + yStep, bot.x + xStep)
-                        pathRGBAsList = bot.pathRGB[:3].tolist()
-                        for i in range(len(pixelPath)):
-                            pointColour = numpyEnvironment[pixelPath[i][0]][pixelPath[i][1]][:3].tolist()
-                            if pointColour != [0, 0, 0] and pointColour != pathRGBAsList:
-                                bot.intersections.append((pixelPath[i][0], pixelPath[i][1]))
-                                pointHistory = intersectionsDict.get((pixelPath[i][0], pixelPath[i][1]))
-                                if pointHistory is None:
-                                    intersectionsDict[(pixelPath[i][0], pixelPath[i][1])] = [pointColour, pathRGBAsList]
-                                else:
-                                    if pathRGBAsList not in intersectionsDict[(pixelPath[i][0], pixelPath[i][1])]:
-                                        intersectionsDict[(pixelPath[i][0], pixelPath[i][1])].append(pathRGBAsList)
+                        bot.pathHistoryIndex += len(pixelPath) -1
+                        # pathRGBAsList = bot.pathRGB[:3].tolist()
+                        for i in range(1, len(pixelPath)):
+                            self.addBotMetaDataToPoint(bot, pixelPath[i])
                             bot.pathHistory.append(pixelPath[i])
-                            numpyEnvironment[pixelPath[i][0]][pixelPath[i][1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
 
                         # Move bot
                         bot.y += yStep
@@ -115,6 +111,11 @@ class MyThread(threading.Thread):
 
 
                     else:   # Bot has found destination and is transporting cargo
+
+                        #      ---------------------------------------------
+                        #          Head to destination to drop off cargo
+                        #      ---------------------------------------------
+
                         # Bot is carrying cargo and is moving towards destination
                         if bot.isCarryingCargo:
                             # logger.info("\n\nBot carrying cargo, moving towards destination")
@@ -124,24 +125,19 @@ class MyThread(threading.Thread):
                             for point in perimeterCoords:
                                 xPoint = 0 if point[0] < 0 else width - 1 if point[0] > width - 1 else point[0]
                                 yPoint = 0 if point[1] < 0 else height - 1 if point[1] > height - 1 else point[1]
-
                                 # Disregard point if it's not a valid destination
                                 if impassableTerrainArray[yPoint][xPoint] == 1:
                                     continue
-
                                 # Check if perimeter point is same colour as bot's colour
                                 if np.array_equal(numpyEnvironment[yPoint][xPoint], bot.pathRGB):
-
                                     # Make sure the path to the point being examined is valid and not blocked
                                     pathToPointInPixels = self.getMovePixels(bot.y, bot.x, yPoint, xPoint)
                                     if len(pathToPointInPixels) == 0:
                                         continue
-
                                     # Make sure point isn't in the wrong direction (avoids looking through entire path history for no reason)
                                     backTrackIndex = int(bot.pathHistoryIndex - (1.5 * botStepSize)) if bot.pathHistoryIndex > (1.5 * botStepSize) else 0
                                     if point in bot.pathHistory[backTrackIndex:bot.pathHistoryIndex]:
                                         continue
-
                                     # Look through path history in the appropriate direction and add perimeter points and their indices (in bot's path history) to a temporary list
                                     for i in range(bot.pathHistoryIndex, len(bot.pathHistory)):
                                         if bot.pathHistory[i][0] == yPoint and bot.pathHistory[i][1] == xPoint:
@@ -149,7 +145,6 @@ class MyThread(threading.Thread):
 
                             # If we have found a viable shortcut, then adjust bot's path history and GUI
                             if len(pointsFoundInHistory) != 0:
-                                # logger.info("Viable shortcut found")
                                 # Determine which point provides the best shortcut (the farthest index)
                                 pointsFoundInHistory.sort(key=lambda x: x[0], reverse=True)
                                 bestPoint = pointsFoundInHistory[0]
@@ -161,10 +156,10 @@ class MyThread(threading.Thread):
                                 # Draw black lines over chunk of path that is not part of shortest path
                                 # Remove intersections from appropriate coords in outdated path history (no longer intersections there)
                                 # Draw the colour of path that was there before, if applicable
-                                start = bot.pathHistoryIndex
+                                # start = bot.pathHistoryIndex
                                 # logger.info("Purging indices. [" + str(start) + ", " + str(bestPoint[0]+1))
                                 for i in range(bot.pathHistoryIndex, bestPoint[0]+1):
-                                    self.safelyRemoveIndexFromBotPathHistory(bot, i)
+                                    self.removeBotMetaDataFromPoint(bot, bot.pathHistory[i])
 
 
 
@@ -172,14 +167,7 @@ class MyThread(threading.Thread):
                                 newPathPixels = self.getMovePixels(bot.y, bot.x, bestPoint[1], bestPoint[2])
                                 # logger.info("NewPathPixels = " + str(newPathPixels))
                                 for i in range(len(newPathPixels)):
-                                    pointColour = numpyEnvironment[newPathPixels[i][0]][newPathPixels[i][1]][:3].tolist()
-                                    if pointColour != [0, 0, 0] and pointColour != pathRGBAsList:
-                                        bot.intersections.append((newPathPixels[i][0], newPathPixels[i][1]))
-                                        pointHistory = intersectionsDict.get((newPathPixels[i][0], newPathPixels[i][1]))
-                                        if pointHistory is None or len(pointHistory) == 0:
-                                            intersectionsDict[(newPathPixels[i][0], newPathPixels[i][1])] = [pointColour, pathRGBAsList]
-                                        else:
-                                            intersectionsDict[(newPathPixels[i][0], newPathPixels[i][1])].append(pathRGBAsList)
+                                    self.addBotMetaDataToPoint(bot, newPathPixels[i])
                                 # logger.info("1st:" + str(bot.pathHistory[:bot.pathHistoryIndex]))
                                 # logger.info("Mid:" + str(newPathPixels))
                                 # logger.info("End:" + str(bot.pathHistory[bestPoint[0]+1:]))
@@ -191,8 +179,8 @@ class MyThread(threading.Thread):
                                 # logger.info("Len history before change "+ str(len(bot.pathHistory)))
                                 bot.pathHistory = bot.pathHistory[:bot.pathHistoryIndex] + newPathPixels + bot.pathHistory[bestPoint[0]+1:]
                                 # logger.info("Len history after change "+ str(len(bot.pathHistory)))
-                                for point in newPathPixels:
-                                    numpyEnvironment[point[0]][point[1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
+                                # for point in newPathPixels:
+                                #     numpyEnvironment[point[0]][point[1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
 
 
                                 # Go forward through path history
@@ -204,18 +192,11 @@ class MyThread(threading.Thread):
                                 bot.x = bot.pathHistory[bot.pathHistoryIndex][1]
 
 
-                            else:
-                                pathRGBAsList = bot.pathRGB[:3].tolist()
+                            else: # no shortcut found, heading towards destination
+                                # pathRGBAsList = bot.pathRGB[:3].tolist()
                                 stopIndex = bot.pathHistoryIndex + botStepSize if bot.pathHistoryIndex + botStepSize <= len(bot.pathHistory) else len(bot.pathHistory)
                                 for i in range(bot.pathHistoryIndex+1, stopIndex):
-                                    pointColour = numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]][:3].tolist()
-                                    if (pointColour != [0, 0, 0] and pointColour != pathRGBAsList) or bot.pathHistory[i] == (endCoord[0], endCoord[1]):
-                                        bot.intersections.append(bot.pathHistory[i])
-                                        pointHistory = intersectionsDict.get(bot.pathHistory[i])
-                                        if pointHistory is None or len(pointHistory) == 0:
-                                            intersectionsDict[bot.pathHistory[i]] = [pointColour, pathRGBAsList]
-                                        else:
-                                            intersectionsDict[bot.pathHistory[i]].append(pathRGBAsList)
+                                    self.addBotMetaDataToPoint(bot, bot.pathHistory[i])
 
 
                                 # Go forward through path history
@@ -227,7 +208,9 @@ class MyThread(threading.Thread):
                                 bot.x = bot.pathHistory[bot.pathHistoryIndex][1]
 
 
-
+                        #      --------------------------------------------
+                        #          Head back to start to get more cargo
+                        #      --------------------------------------------
 
                         # Bot is not carrying cargo and is heading back to start
                         else:
@@ -267,7 +250,7 @@ class MyThread(threading.Thread):
                                 # Determine which point provides the best shortcut (the farthest index)
                                 pointsFoundInHistory.sort(key=lambda x: x[0])
                                 bestPoint = pointsFoundInHistory[0]
-                                pathRGBAsList = bot.pathRGB[:3].tolist()
+                                # pathRGBAsList = bot.pathRGB[:3].tolist()
                                 # logger.info("Bot's current pathHistoryIndex: " + str(bot.pathHistoryIndex))
                                 # logger.info("Bot's current coord: (y=" + str(bot.y) + ", x=" + str(bot.x) + ")")
                                 # logger.info("bestPoint found in bots history: " + str(bestPoint))
@@ -275,21 +258,14 @@ class MyThread(threading.Thread):
                                 # Draw black pixels over chunk of path that is not part of shortest path
                                 # logger.info("Purging indices. [" + str(bot.pathHistoryIndex) + ", " + str(bestPoint[0]-1) + ", step = -1)")
                                 for i in range(bot.pathHistoryIndex, bestPoint[0]-1, -1):
-                                    self.safelyRemoveIndexFromBotPathHistory(bot, i)
+                                    self.removeBotMetaDataFromPoint(bot, bot.pathHistory[i])
 
 
                                 # Add the new path to path history and add the points to be drawn to the queue
                                 newPathPixels = self.getMovePixels(bestPoint[1], bestPoint[2], bot.y, bot.x)
                                 # logger.info("NewPathPixels = " + str(newPathPixels))
                                 for i in range(len(newPathPixels)):
-                                    pointColour = numpyEnvironment[newPathPixels[i][0]][newPathPixels[i][1]][:3].tolist()
-                                    if pointColour != [0, 0, 0] and pointColour != pathRGBAsList:
-                                        bot.intersections.append((newPathPixels[i][0], newPathPixels[i][1]))
-                                        pointHistory = intersectionsDict.get((newPathPixels[i][0], newPathPixels[i][1]))
-                                        if pointHistory is None or len(pointHistory) == 0:
-                                            intersectionsDict[(newPathPixels[i][0], newPathPixels[i][1])] = [pointColour, pathRGBAsList]
-                                        else:
-                                            intersectionsDict[(newPathPixels[i][0], newPathPixels[i][1])].append(pathRGBAsList)
+                                    self.addBotMetaDataToPoint(bot, newPathPixels[i])
 
                                 # logger.info("1st:" + str(bot.pathHistory[:bestPoint[0]]))
                                 # logger.info("Mid:" + str(newPathPixels))
@@ -302,10 +278,11 @@ class MyThread(threading.Thread):
                                 # logger.info("Len history before change "+ str(len(bot.pathHistory)))
 
                                 bot.pathHistory = bot.pathHistory[:bestPoint[0]] + newPathPixels + bot.pathHistory[bot.pathHistoryIndex+1:]
-                                bot.pathHistoryIndex = bot.pathHistoryIndex - (bot.pathHistoryIndex - bestPoint[0]) + len(newPathPixels) -1
+                                bot.pathHistoryIndex = bestPoint[0] + len(newPathPixels) -1
+                                bot.pathHistoryIndex = bot.pathHistory.index((bot.y, bot.x))
                                 # logger.info("Len history after change " + str(len(bot.pathHistory)))
-                                for point in newPathPixels:
-                                    numpyEnvironment[point[0]][point[1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
+                                # for point in newPathPixels:
+                                #     numpyEnvironment[point[0]][point[1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
 
                                 # Go backwards through path history
                                 bot.pathHistoryIndex -= botStepSize
@@ -317,17 +294,10 @@ class MyThread(threading.Thread):
 
                             else:
                                 # no shortcut, move ten, check for intersections
-                                pathRGBAsList = bot.pathRGB[:3].tolist()
-                                stopIndex = bot.pathHistoryIndex-botStepSize if bot.pathHistoryIndex-botStepSize > -1 else -1
-                                for i in range(bot.pathHistoryIndex-1, stopIndex, -1):
-                                    pointColour = numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]][:3].tolist()
-                                    if (pointColour != [0, 0, 0] and pointColour != pathRGBAsList) or bot.pathHistory[i] == (startCoord[0], startCoord[1]):
-                                        bot.intersections.append((bot.pathHistory[i][0], bot.pathHistory[i][1]))
-                                        pointHistory = intersectionsDict.get((bot.pathHistory[i][0], bot.pathHistory[i][1]))
-                                        if pointHistory is None or len(pointHistory) == 0:
-                                            intersectionsDict[bot.pathHistory[i]] = [pointColour, pathRGBAsList]
-                                        else:
-                                            intersectionsDict[bot.pathHistory[i]].append(pathRGBAsList)
+                                # pathRGBAsList = bot.pathRGB[:3].tolist()
+                                # stopIndex = bot.pathHistoryIndex-botStepSize if bot.pathHistoryIndex-botStepSize > -1 else -1
+                                # for i in range(bot.pathHistoryIndex-1, stopIndex, -1):
+                                #     self.addBotMetaDataToPoint(bot, bot.pathHistory[i])
 
                                 # Go backwards through path history
                                 bot.pathHistoryIndex -= botStepSize
@@ -336,7 +306,11 @@ class MyThread(threading.Thread):
                                     bot.isCarryingCargo = True
                                 bot.y = bot.pathHistory[bot.pathHistoryIndex][0]
                                 bot.x = bot.pathHistory[bot.pathHistoryIndex][1]
-                        # TODO ------    Check for other bots to communicate with --------
+
+                        #      -----------------------------------
+                        #          Communicate with other bots
+                        #      -----------------------------------
+
                         for otherBot in listOfBots:
                             if not (bot.pathRGB == otherBot.pathRGB).all():  # If other bot is not same bot
                                 if (bot.x - otherBot.x) ** 2 + (
@@ -344,7 +318,7 @@ class MyThread(threading.Thread):
                                     if otherBot.pathRGB.tolist() not in bot.recentlySeenBots:
                                         bot.recentlySeenBots.append(otherBot.pathRGB.tolist())
                                         otherBot.recentlySeenBots.append(bot.pathRGB.tolist())
-                                        self.compareAndUpdatePaths(bot, otherBot)
+                                        # self.compareAndUpdatePaths(bot, otherBot)
 
                                 else:  # Other bot is out of range, so make sure it's removed from recently seen list
                                     # TODO maybe add a counter so that bots don't go in, go out, go in, go out, etc every turn
@@ -415,77 +389,6 @@ class MyThread(threading.Thread):
                 pointsAlongCircle.append((y + xOffset, -x + yOffset))
                 pointsAlongCircle.append((-y + xOffset, -x + yOffset))
         return pointsAlongCircle
-
-    @jit(nopython=True)
-    def applyPathSmoothing(self, bot, direction):
-        perimeterCoords = self.getPerimeterCoords(bot.x, bot.y)
-        pointsFoundInHistory = []
-        for point in perimeterCoords:
-            xPoint = 0 if point[0] < 0 else width - 1 if point[0] > width - 1 else point[0]
-            yPoint = 0 if point[1] < 0 else height - 1 if point[1] > height - 1 else point[1]
-
-            # Disregard point if it's not a valid destination
-            if impassableTerrainArray[yPoint][xPoint] == 1:
-                continue
-
-            # Check if perimeter point is same colour as bot's colour
-            if np.array_equal(numpyEnvironment[yPoint][xPoint], bot.pathRGB):
-
-                # Make sure the path to the point being examined is valid and not blocked
-                pathToPointInPixels = self.getMovePixels(bot.y, bot.x, yPoint, xPoint)
-                if len(pathToPointInPixels) == 0:
-                    continue
-
-                # Make sure point isn't in the wrong direction (avoids looking through entire path history for no reason)
-                if direction == 'forward':
-                    backTrackIndex = int(bot.pathHistoryIndex - (1.5*botStepSize)) if bot.pathHistoryIndex > (1.5*botStepSize) else 0
-                    if point in bot.pathHistory[backTrackIndex:bot.pathHistoryIndex]:
-                        continue
-                else:
-                    backTrackIndex = int(bot.pathHistoryIndex + (1.5*botStepSize)) if bot.pathHistoryIndex < len(bot.pathHistory) - (1.5*botStepSize) else len(bot.pathHistory)
-                    if point in bot.pathHistory[bot.pathHistoryIndex:backTrackIndex]:
-                        continue
-
-                # Look through path history in the appropriate direction and add perimeter points and their indices (in bot's path history) to a temporary list
-                start = bot.pathHistoryIndex
-                stop = len(bot.pathHistory) if direction == 'forward' else 0
-                step = 1 if direction == 'forward' else -1
-                for i in range(start, stop, step):
-                    if bot.pathHistory[i][0] == yPoint and bot.pathHistory[i][1] == xPoint:
-                        pointsFoundInHistory.append((i, yPoint, xPoint))
-
-        # If we have found a viable shortcut, then adjust bot's path history and GUI
-        if len(pointsFoundInHistory) != 0:
-            # Determine which point provides the best shortcut (the farthest index)
-            if direction == 'forward':
-                pointsFoundInHistory.sort(key=lambda x: x[0], reverse=True)
-            else:
-                pointsFoundInHistory.sort(key=lambda x: x[0])
-            bestPoint = pointsFoundInHistory[0]
-
-            # TODO adjust these off by ones to see if it improves "breaks" in path
-            # Draw black lines over chunk of path that is not part of shortest path
-            start = bot.pathHistoryIndex
-            stop = bestPoint[0] - 1 if direction == 'forward' else bestPoint[0] + 1 #These 'ones' ensure we don't go past either end of pathHistory
-            step = 1 if direction == 'forward' else -1
-            for i in range(bot.pathHistoryIndex, stop, step):
-                if direction == 'forward':
-                    bot.pathToBeCleared.put((bot.pathHistory[i], bot.pathHistory[i + 1]))
-                else:
-                    bot.pathToBeCleared.put((bot.pathHistory[i], bot.pathHistory[i - 1]))
-
-            # Add the new path to path history and add them lines to be drawn to the queue
-            newPathPixels = self.getMovePixels(bot.y, bot.x, bestPoint[1], bestPoint[2])
-            if direction == 'forward':
-                bot.pathHistory = bot.pathHistory[:bot.pathHistoryIndex] + newPathPixels + bot.pathHistory[bestPoint[0]:]
-            else:
-                bot.pathHistory = bot.pathHistory[:bestPoint[0]+1] + newPathPixels + bot.pathHistory[bot.pathHistoryIndex:]
-                bot.pathHistoryIndex = bot.pathHistoryIndex - (bot.pathHistoryIndex - bestPoint[0]) + len(newPathPixels)
-
-            bot.pathToBeDrawn.put((bot.pathHistory[bot.pathHistoryIndex], (bestPoint[1], bestPoint[2])))
-
-        else:
-            logger.info("No viable")
 
     # Function implemented with the help of http://www.roguebasin.com/index.php?title=Bresenham%27s_Line_Algorithm
     # Checks each point in a line to ensure a bot doesn't "jump" over an illegal area
@@ -594,6 +497,10 @@ class MyThread(threading.Thread):
             lengthOfBotPath = botEndIndex - botStartIndex
             lengthOfOtherBotPath = otherBotEndIndex - otherBotStartIndex
 
+            # Don't adjust this section of paths for either bot since they're basically the same length
+            if abs(lengthOfBotPath - lengthOfOtherBotPath) < 10:
+                continue
+
             logger.info("\n\nCurrently examining these bot points:      " + str(botIndices[i]) + " " + str(botIndices[i+1]))
             logger.info("Currently examining these otherbot points: " + str(otherBotIndices[i]) + " " + str(otherBotIndices[i+1]))
 
@@ -605,11 +512,6 @@ class MyThread(threading.Thread):
                         "\nlengthOfOtherBotPath     " + str(lengthOfOtherBotPath) +
                         "\nlen(bot.pathHistory)     " + str(len(bot.pathHistory)) +
                         "\nlen(otherBot.pathHistory)" + str(len(otherBot.pathHistory)))
-
-            # Don't adjust this section of paths for either bot since they're basically the same length
-            if abs(lengthOfBotPath - lengthOfOtherBotPath) < 2:
-                logger.info("*** IGNORING THESE POINTS. SECTIONS TOO CLOSE IN LENGTH ***")
-                continue
 
             botIsInSection = False
             if botStartIndex < bot.pathHistoryIndex < botEndIndex:
@@ -676,35 +578,61 @@ class MyThread(threading.Thread):
                     logger.info("Safely removing points in otherBot's pathHistory. Starting at index (incl) " + str(otherBotStartIndex + 1) +
                                 ". Stopping at index (excl) " + str(otherBotEndIndex))
 
-                    # Colour path being removed all white to see steps
-                    for i in range(otherBotStartIndex + 1, otherBotEndIndex):
-                        numpyEnvironment[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]] = [255, 255, 255, 255]
-                    self.pause()
+                    if highlightMode:
+                        # Colour path being removed all white to see steps
+                        for i in range(otherBotStartIndex + 1, otherBotEndIndex):
+                            numpyEnvironment[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]] = [255, 255, 255, 255]
+                        self.pause()
 
 
                     for i in range(otherBotStartIndex + 1, otherBotEndIndex):
-                        self.safelyRemoveIndexFromBotPathHistory(otherBot, i)
+                        self.removeBotMetaDataFromPoint(otherBot, otherBot.pathHistory[i])
+
+
                     logger.info("Changing otherBots pathHistory:" +
                                 "\n 1st chunk is otherBot.pathHistory from start up to index (excl) " + str(otherBotStartIndex) +
                                 "\n 2nd chunk is bot.pathHistory from index " + str(botStartIndex) + " (incl) up to index " + str(botEndIndex) + " (excl)" +
                                 "\n 3rd chunk is otherBot.pathHistory from index " + str(otherBotEndIndex) + " (incl) to end of otherBot.pathHistory")
+                    logger.info("OtherBots coords based on history and index before HISTORY CHANGE change: (y= " + str(
+                        otherBot.pathHistory[otherBot.pathHistoryIndex][0]) + ", x= " + str(
+                        otherBot.pathHistory[otherBot.pathHistoryIndex][1]) + ")")
+                    logger.info(
+                        "OtherBots otherbot.y and other bot.x before HISTORY change: (" + str(otherBot.y) + ", " + str(
+                            otherBot.x) + ")")
                     otherBot.pathHistory = otherBot.pathHistory[:otherBotStartIndex] + bot.pathHistory[botStartIndex:botEndIndex] + otherBot.pathHistory[otherBotEndIndex:]
 
                     if otherBot.pathHistoryIndex >= otherBotEndIndex:
                         logger.info("OtherBot is currently past section being edited, so it's index must be changed.")
                         logger.info("Index before change: " + str(otherBot.pathHistoryIndex))
+                        # logger.info("OtherBots coords based on history and index before index change: (y= " + str(otherBot.pathHistory[otherBot.pathHistoryIndex][0]) + ", x= " + str(otherBot.pathHistory[otherBot.pathHistoryIndex][1]) + ")")
+                        logger.info("OtherBots otherbot.y and other bot.x before index change: (" + str(otherBot.y) + ", " + str(otherBot.x) + ")")
                         logger.info("Amount being subtracted (longer path length - shorter path length): " + str(lengthOfOtherBotPath - lengthOfBotPath))
+
+                        logger.info("otherBot.pathHistoryIndex before adjustment:" + str(otherBot.pathHistoryIndex))
+                        # findIndex = otherBot.pathHistory.index((otherBot.pathHistory[otherBot.pathHistoryIndex][0], otherBot.pathHistory[otherBot.pathHistoryIndex][1]))
+                        # logger.info("results of findIndex before adjustment:" + str(findIndex))
+
                         otherBot.pathHistoryIndex = otherBot.pathHistoryIndex - lengthOfOtherBotPath + lengthOfBotPath
+
+                        logger.info("otherBot.pathHistoryIndex after adjustment:" + str(otherBot.pathHistoryIndex))
+                        findIndex = otherBot.pathHistory.index((otherBot.pathHistory[otherBot.pathHistoryIndex][0], otherBot.pathHistory[otherBot.pathHistoryIndex][1]))
+                        logger.info("results of findIndex after adjustment:" + str(findIndex))
+
                         logger.info("Index after change: " + str(otherBot.pathHistoryIndex))
+                        logger.info("OtherBots coords based on history and index after index change: (y= " + str(
+                            otherBot.pathHistory[otherBot.pathHistoryIndex][0]) + ", x= " + str(
+                            otherBot.pathHistory[otherBot.pathHistoryIndex][1]) + ")")
+                        logger.info("OtherBots otherbot.y and otherbot.x AFTER index change: (" + str(otherBot.y) + ", " + str(otherBot.x) + ")")
+                        logger.info("END DONE END")
 
-                    logger.info("Redrawing paths for both bots, bot first, then otherBot")
-                    # redraw bot paths to do sanity checks
-                    for i in range(len(bot.pathHistory)):
-                        numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = bot.pathRGB
-                    for i in range(len(otherBot.pathHistory)):
-                        numpyEnvironment[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]] = otherBot.pathRGB
+                    circles.append((otherBot.pathHistory[otherBot.pathHistoryIndex][0],
+                                    otherBot.pathHistory[otherBot.pathHistoryIndex][1]))
 
-                    self.pause()
+                    for i in range(botStartIndex + 1, botEndIndex):
+                        self.addBotMetaDataToPoint(otherBot, bot.pathHistory[i])
+
+                    if highlightMode:
+                        self.pause()
 
             else:  # otherbot has shorter section, so improve bot's section
                 if botIsInSection:
@@ -725,31 +653,41 @@ class MyThread(threading.Thread):
                     pass
         # logger.info("\n" + str(sharedPoints) + "\n" + str(bot1Indices) + "\n" + str(bot2Indices) + "\n")
 
-        circles.clear()
+            circles.clear()
 
-    def safelyRemoveIndexFromBotPathHistory(self, bot, i):
-        numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = [0, 0, 0, 255]
+    def removeBotMetaDataFromPoint(self, bot, point):
+        numpyEnvironment[point[0]][point[1]] = [0, 0, 0, 255]
         # Remove point from intersection dictionary
         try:
-            intersectionsDict[bot.pathHistory[i]].remove(bot.pathRGB[:3].tolist())
-            prevCol = intersectionsDict[bot.pathHistory[i]][len(intersectionsDict[bot.pathHistory[i]]) - 1]
-            numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = [prevCol[0], prevCol[1], prevCol[2], 255]
-
-            if len(intersectionsDict[bot.pathHistory[i]]) < 2:
-                del intersectionsDict[bot.pathHistory[i]]
+            intersectionsDict[point].remove(bot.pathRGB[:3].tolist())
+            prevCol = intersectionsDict[point][len(intersectionsDict[point]) - 1]
+            numpyEnvironment[point[0]][point[1]] = [prevCol[0], prevCol[1], prevCol[2], 255]
+            if len(intersectionsDict[point]) < 2:
+                del intersectionsDict[point]
         except ValueError:
             pass
         except KeyError:
             pass
+
         # Remove point from bot's intersections list
         try:
-            bot.intersections.remove(bot.pathHistory[i])
-            # bot.intersections = [x for x in bot.intersections if x[:2] != bot.pathHistory[i]]
+            bot.intersections.remove(point)
         except ValueError:
             pass
 
-    def safelyInsertPointIntoBotPathHistory(self, point, bot, index):
-        pass
+    def addBotMetaDataToPoint(self, bot, point):
+        pointColour = numpyEnvironment[point[0]][point[1]][:3].tolist()
+        pathRGBAsList = bot.pathRGB[:3].tolist()
+        if pointColour != [0, 0, 0] and pointColour != pathRGBAsList:
+            if point not in bot.intersections:
+                bot.intersections.append(point)
+            pointHistory = intersectionsDict.get(point)
+            if pointHistory is None or len(pointHistory) == 0:
+                intersectionsDict[point] = [pointColour, pathRGBAsList]
+            else:
+                if pathRGBAsList not in intersectionsDict[point]:
+                    intersectionsDict[point].append(pathRGBAsList)
+        numpyEnvironment[point[0]][point[1]] = [bot.pathRGB[0], bot.pathRGB[1], bot.pathRGB[2], 255]
 
 
 def drawStartEndLines(w):
@@ -761,22 +699,27 @@ def drawStartEndLines(w):
     return [start1, start2, end1, end2]
 
 def pauseButton():
-    # global paused
-    # if not paused:
-    #     paused = True
-    #     myThread.pause()
-    # else:
-    #     paused = False
-    #     myThread.resume()
+    global paused
+    global highlightMode
+    if highlightMode:
+        paused = False
+        myThread.resume()
+    else:
+        if not paused:
+            paused = True
+            myThread.pause()
+        else:
+            paused = False
+            myThread.resume()
 
-    paused = False
-    myThread.resume()
+
 def slowerButton():
     global botSlowdown
     botSlowdown *= 1.25
 def fasterButton():
     global botSlowdown
     botSlowdown /= 1.25
+
 
 # Main function
 if __name__ == "__main__":
