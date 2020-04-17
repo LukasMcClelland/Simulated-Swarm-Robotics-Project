@@ -1,0 +1,2 @@
+numBots,numEquipment,visionRadius,commRange,commStartDelay,commTimeoutLength,negativePriority,enviroName,cycles,avgPathLength
+1,50,100,60,11,0,-100,black1500,13037,1154
