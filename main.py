@@ -5,29 +5,28 @@ import threading
 import logging
 import time
 import sys
+import os
 from PIL import Image, ImageTk
 import tkinter as tk
 from random import randint, shuffle, random, uniform
 import numpy as np
 
 # Adjustable globals
-numberOfBots = 5
+numberOfBots = 2
 numEquipment = 50
 botVisionRadius = 100
-botCommunicationRange = 50
+botCommunicationRange = 60
 botSlowdown = 0.05
 maxBotTurnInRads = 0.25
 highlightMode = False
-startOfCommunicationDelay = 100 # bots start talking after each bot has had X turns
+startOfCommunicationDelay = 200 # bots start talking after each bot has had X turns
 GUI = True
-botTimeoutAmount = 10
+botTimeoutAmount = 5
 negativePriority = - (numberOfBots * 10)
 
 # Helper globals
 startCoord = [500, 125]  # (Y, X)
 endCoord = [225, 650]  # (Y, X)
-# startCoord = [350, 181]  # (Y, X)
-# endCoord = [148, 1334]  # (Y, X)
 botStepSize = 10
 paused = False
 myThread = None
@@ -36,13 +35,15 @@ listOfBots = []
 readyToExit = False
 botDrawRadius = 5
 batchFileMode = False
-botsShouldCommunicate = True
-T_cyclesToComplete = 0
+environmentName = "green"
+outputFileName = "results.csv"
+delayFlag = False
 
 
 class Bot:
     def __init__(self, botNumber):
         self.pathRGB = np.array([randint(50, 255), randint(50, 255), randint(50, 255), 255]).tolist()
+        # self.pathRGB = np.array([255, 50, 150, 255]).tolist()
         self.pathHex = "#" + str(hex(self.pathRGB[0]))[2:] + str(hex(self.pathRGB[1]))[2:] + str(hex(self.pathRGB[2]))[2:]
         self.y = startCoord[0]
         self.x = startCoord[1]
@@ -65,6 +66,7 @@ class Bot:
         self.timeoutCounter = 0
         self.canCommunicate = True
         self.communicationPriorityDict = dict()
+
 class MyThread(threading.Thread):
     def __init__(self, listOfBots, numEquipment):
         threading.Thread.__init__(self)
@@ -75,11 +77,14 @@ class MyThread(threading.Thread):
         self.numEquipmentAtStart = numEquipment
         self.numEquipmentAtDest = 0
         self.cycles = 0
+        self.totalNumCommunications = 0
+        self.totalPixelsOfPathChanges = 0
+
 
     def run(self):
         global botVisionRadius
         global readyToExit
-        global T_cyclesToComplete
+        global delayFlag
         while True:
             with self.pause_cond:
                 while self.paused:
@@ -255,18 +260,61 @@ class MyThread(threading.Thread):
 
                 self.cycles += 1
 
-                # Slow down bots (simulate movement and help for visual analysis)
+                # Slow down bots (simulate movement and help visual analysis)
                 time.sleep(botSlowdown)
 
     def logTestData(self):
+        # Set up thread logging
+        logging.basicConfig(filename=outputFileName,
+                            format='%(message)s',
+                            filemode='a',
+                            level=logging.DEBUG)
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+
+        if os.path.exists(outputFileName) and os.stat(outputFileName).st_size == 0:
+            logger.info(
+                # PARAMETERS
+                "numBots," +
+                "numEquipment," +
+                "visionRadius," +
+                "commRange," +
+                "commStartDelay," +
+                "commTimeoutLength," +
+                "negativePriority," +
+                "enviroName," +
+
+                # RESULTS
+
+                "cycles," +
+                "avgPathLength"
+            )
+
+        # Get avg path length for all bots
+        total = 0
+        for bot in self.bots:
+            total += len(bot.pathHistory)
+        avgPathLength = int(total / len(self.bots))
+
+
         logger.info(
             # PARAMETERS
             str(numberOfBots) + "," +
+            str(numEquipment) + "," +
+            str(botVisionRadius) + "," +
+            str(botCommunicationRange) + "," +
+            str(startOfCommunicationDelay) + "," +
+            str(botTimeoutAmount) + "," +
+            str(negativePriority) + "," +
+            str(environmentName) + "," +
 
             # RESULTS
 
-            str(self.cycles)
+            str(self.cycles) + "," +
+            str(avgPathLength)
+
         )
+        logging.shutdown()
 
     def pause(self):
         self.paused = True
@@ -579,8 +627,9 @@ class MyThread(threading.Thread):
 
 
         if dataTransferred:
-            bot.timeoutCounter = 5
-            otherBot.timeoutCounter = 5
+            bot.timeoutCounter = botTimeoutAmount
+            otherBot.timeoutCounter = botTimeoutAmount
+            self.totalNumCommunications += 1
 
 
         # Two safeguard checks to ensure that bot status "successful path" status get's updated if needed after changes
@@ -794,18 +843,35 @@ if __name__ == "__main__":
         numberOfBots = int(sys.argv[2])
         numEquipment = int(sys.argv[3])
         botVisionRadius = int(sys.argv[4])
-        startOfCommunicationDelay = int(sys.argv[5])
-        botTimeoutAmount = int(sys.argv[6])
-        negativePriority = int(sys.argv[7])
-        botsShouldCommunicate = bool(sys.argv[8])
+        botCommunicationRange = int(sys.argv[5])
+        startOfCommunicationDelay = int(sys.argv[6])
+        botTimeoutAmount = int(sys.argv[7])
+        negativePriority = int(sys.argv[8])
+        environmentName = sys.argv[9]
+        outputFileName = sys.argv[10]
 
+    if environmentName == "black750":
+        environmentPath = "black750.png"
+
+    elif environmentName == "black1500":
+        environmentPath = "black1500.png"
+        startCoord = [350, 181]  # (Y, X)
+        endCoord = [148, 1334]  # (Y, X)
+
+    elif environmentName == "blue":
+        environmentPath = "environment2.png"
+        startCoord = [350, 181]  # (Y, X)
+        endCoord = [148, 1334]  # (Y, X)
+
+    else:
+        environmentPath = "environment1.png"
 
 
     programStartTime = time.time()
 
 
     # Initialize PIL images, data, and tools
-    originalBG = Image.open("environment0.png")
+    originalBG = Image.open(environmentPath)
     numpyEnvironment = np.array(originalBG)[...,:3]
     height, width = numpyEnvironment.shape[0], numpyEnvironment.shape[1]
     originalBG.close()
@@ -851,20 +917,12 @@ if __name__ == "__main__":
                 tempRow.append(1)
         impassableTerrainArray.append(tempRow)
 
-    # Set up thread logging
-    logging.basicConfig(filename="results.csv",
-                        format='%(message)s',
-                        filemode='a',
-                        level=logging.DEBUG)
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-
     # Spawn bots and launch thread
     for index in range(numberOfBots):
         bot = Bot(index)
         listOfBots.append(bot)
     myThread = MyThread(listOfBots, numEquipment)
-    myThread.isDaemon()
+    # myThread.isDaemon()
     myThread.start()
 
     if GUI:
