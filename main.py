@@ -14,12 +14,12 @@ import numpy as np
 # Adjustable globals
 numberOfBots = 2
 numEquipment = 50
-botVisionRadius = 100
-botCommunicationRange = 60
+botVisionRadius = 75
+botCommunicationRange = 75
 botSlowdown = 0.05
 maxBotTurnInRads = 0.25
-highlightMode = False
-startOfCommunicationDelay = 200 # bots start talking after each bot has had X turns
+highlightMode = True
+startOfCommunicationDelay = 0 # bots start talking after each bot has had X turns
 GUI = True
 botTimeoutAmount = 5
 negativePriority = - (numberOfBots * 10)
@@ -510,8 +510,9 @@ class MyThread(threading.Thread):
                         else:
                             if highlightMode:
                                 # Colour path being removed all white to see steps
+                                self.pause()
                                 for i in range(otherBotStartIndex + 1, otherBotEndIndex):
-                                    numpyEnvironment[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]] = [255, 255, 255, 255]
+                                    numpyEnvironment[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]] = [255, 255, 255]
                                 self.pause()
                                 # for i in range(otherBotStartIndex + 1, otherBotEndIndex):
                                 #     numpyEnvironment[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]] = pointGrid[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]][0]
@@ -547,8 +548,9 @@ class MyThread(threading.Thread):
                         else:
                             if highlightMode:
                                 # Colour path being removed all white to see steps
+                                self.pause()
                                 for i in range(botStartIndex + 1, botEndIndex):
-                                    numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = [255, 255, 255, 255]
+                                    numpyEnvironment[bot.pathHistory[i][0]][bot.pathHistory[i][1]] = [255, 255, 255]
                                 self.pause()
                                 # for i in range(otherBotStartIndex + 1, otherBotEndIndex):
                                 #     numpyEnvironment[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]] = pointGrid[otherBot.pathHistory[i][0]][otherBot.pathHistory[i][1]][0]
@@ -579,6 +581,7 @@ class MyThread(threading.Thread):
                 circles.clear()
 
         if bot.hasSuccessfulPath != otherBot.hasSuccessfulPath:
+            self.pause()
             if bot.hasSuccessfulPath and not otherBot.hasSuccessfulPath:
                 # Bot gives path to OtherBot
                 helper = bot
@@ -618,6 +621,7 @@ class MyThread(threading.Thread):
 
                 self.applyPathSmoothing(helpee, 'forward')
                 self.applyPathSmoothing(helpee, 'backward')
+                self.pause()
 
                 helpee.hasSuccessfulPath = True
                 helpee.isCarryingCargo = False
@@ -863,8 +867,12 @@ if __name__ == "__main__":
         startCoord = [350, 181]  # (Y, X)
         endCoord = [148, 1334]  # (Y, X)
 
+    elif environmentName == "breaker1":
+        environmentPath = "breaker1.PNG"
+
     else:
         environmentPath = "environment1.png"
+
 
 
     programStartTime = time.time()
@@ -920,6 +928,11 @@ if __name__ == "__main__":
     # Spawn bots and launch thread
     for index in range(numberOfBots):
         bot = Bot(index)
+        if index == 0:
+            bot.pathRGB = np.array([255, 50, 50, 255]).tolist()
+        else:
+            bot.pathRGB = np.array([55, 250, 150, 255]).tolist()
+        bot.pathHex = "#" + str(hex(bot.pathRGB[0]))[2:] + str(hex(bot.pathRGB[1]))[2:] + str(hex(bot.pathRGB[2]))[2:]
         listOfBots.append(bot)
     myThread = MyThread(listOfBots, numEquipment)
     # myThread.isDaemon()
