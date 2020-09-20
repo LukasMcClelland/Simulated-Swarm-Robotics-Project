@@ -12,13 +12,13 @@ from random import randint, shuffle, random, uniform
 import numpy as np
 
 # Adjustable globals
-numberOfBots = 2
+numberOfBots = 10
 numEquipment = 50
 botVisionRadius = 75
 botCommunicationRange = 75
 botSlowdown = 0.05
 maxBotTurnInRads = 0.25
-highlightMode = True
+highlightMode = False
 startOfCommunicationDelay = 0 # bots start talking after each bot has had X turns
 GUI = True
 botTimeoutAmount = 5
@@ -30,13 +30,13 @@ endCoord = [225, 650]  # (Y, X)
 botStepSize = 10
 paused = False
 myThread = None
-circles = []
+highlightRects = []
 listOfBots = []
 readyToExit = False
 botDrawRadius = 5
 batchFileMode = False
 environmentName = "green"
-outputFileName = "results.csv"
+outputFileName = "tests_and_results/results.csv"
 delayFlag = False
 
 
@@ -86,6 +86,8 @@ class MyThread(threading.Thread):
         global readyToExit
         global delayFlag
         while True:
+            if readyToExit:
+                break
             with self.pause_cond:
                 while self.paused:
                     self.pause_cond.wait()
@@ -255,8 +257,7 @@ class MyThread(threading.Thread):
 
                 if allBotsAreDone:
                     self.logTestData()
-                    readyToExit = True
-                    exit()
+                    closeGracefully()
 
                 self.cycles += 1
 
@@ -469,9 +470,6 @@ class MyThread(threading.Thread):
                 if botIndices[i][1] != otherBotIndices[i][1] or botIndices[i+1][1] != otherBotIndices[i+1][1]:
                     return
 
-                # circles.append(botIndices[i][1])
-                # circles.append(otherBotIndices[i][1])
-
                 botStartIndex = botIndices[i][0]
                 botEndIndex = botIndices[i + 1][0]
                 otherBotStartIndex = otherBotIndices[i][0]
@@ -528,8 +526,8 @@ class MyThread(threading.Thread):
 
                                 findIndex = otherBot.pathHistory.index((otherBot.pathHistory[otherBot.pathHistoryIndex][0], otherBot.pathHistory[otherBot.pathHistoryIndex][1]))
 
-                            circles.append((otherBot.pathHistory[otherBot.pathHistoryIndex][0],
-                                            otherBot.pathHistory[otherBot.pathHistoryIndex][1]))
+                            highlightRects.append((otherBot.pathHistory[otherBot.pathHistoryIndex][0],
+                                                   otherBot.pathHistory[otherBot.pathHistoryIndex][1]))
 
                             for i in range(botStartIndex + 1, botEndIndex):
                                 self.addBotMetaDataToPoint(otherBot, bot.pathHistory[i])
@@ -566,8 +564,8 @@ class MyThread(threading.Thread):
                                 findIndex = bot.pathHistory.index((bot.pathHistory[bot.pathHistoryIndex][0],
                                                                         bot.pathHistory[bot.pathHistoryIndex][1]))
 
-                            circles.append((bot.pathHistory[bot.pathHistoryIndex][0],
-                                            bot.pathHistory[bot.pathHistoryIndex][1]))
+                            highlightRects.append((bot.pathHistory[bot.pathHistoryIndex][0],
+                                                   bot.pathHistory[bot.pathHistoryIndex][1]))
 
                             for i in range(otherBotStartIndex + 1, otherBotEndIndex):
                                 self.addBotMetaDataToPoint(bot, otherBot.pathHistory[i])
@@ -575,18 +573,18 @@ class MyThread(threading.Thread):
                             if highlightMode:
                                 self.pause()
 
-                # End of iteration, clear section specific things. like circles
+                # End of iteration, clear section specific things, e.g. highlightRects list
                 dataTransferred = True
                 totalDataTransferred += min(lengthOfBotPath, lengthOfOtherBotPath)
-                circles.clear()
+                highlightRects.clear()
 
         if bot.hasSuccessfulPath != otherBot.hasSuccessfulPath:
-            self.pause()
             if bot.hasSuccessfulPath and not otherBot.hasSuccessfulPath:
                 # Bot gives path to OtherBot
                 helper = bot
                 helpee = otherBot
             if not bot.hasSuccessfulPath and otherBot.hasSuccessfulPath:
+                # OtherBot gives path to Bot
                 helper = otherBot
                 helpee = bot
 
@@ -621,7 +619,6 @@ class MyThread(threading.Thread):
 
                 self.applyPathSmoothing(helpee, 'forward')
                 self.applyPathSmoothing(helpee, 'backward')
-                self.pause()
 
                 helpee.hasSuccessfulPath = True
                 helpee.isCarryingCargo = False
@@ -838,6 +835,13 @@ def fasterButton():
     global botSlowdown
     botSlowdown /= 1.25
 
+def closeGracefully():
+    global readyToExit
+    readyToExit = True
+    if GUI:
+        root.destroy()
+    print("Program terminated.")
+
 # Main function
 if __name__ == "__main__":
     if len(sys.argv) != 1:
@@ -855,28 +859,26 @@ if __name__ == "__main__":
         outputFileName = sys.argv[10]
 
     if environmentName == "black750":
-        environmentPath = "black750.png"
+        environmentPath = "environments/black750.png"
 
     elif environmentName == "black1500":
-        environmentPath = "black1500.png"
+        environmentPath = "environments/black1500.png"
         startCoord = [350, 181]  # (Y, X)
         endCoord = [148, 1334]  # (Y, X)
 
     elif environmentName == "blue":
-        environmentPath = "environment2.png"
+        environmentPath = "environments/environment2.png"
         startCoord = [350, 181]  # (Y, X)
         endCoord = [148, 1334]  # (Y, X)
 
     elif environmentName == "breaker1":
-        environmentPath = "breaker1.PNG"
+        environmentPath = "environments/breaker1.PNG"
 
     else:
-        environmentPath = "environment1.png"
+        environmentPath = "environments/environment1.png"
 
-
-
+    # Start program timer
     programStartTime = time.time()
-
 
     # Initialize PIL images, data, and tools
     originalBG = Image.open(environmentPath)
@@ -891,11 +893,13 @@ if __name__ == "__main__":
             tempRow.append([])
         pointGrid.append(tempRow)
 
+    print("Program launching...")
     if GUI:
         # Initialize tkinter tools and open window
         root = tk.Tk()
         root.title("Swarm Pathfinding")
         root.geometry("+0+5")
+        root.protocol('WM_DELETE_WINDOW', closeGracefully)
         window = tk.Canvas(root, width=width, height=height)
         backgroundImage = ImageTk.PhotoImage(Image.fromarray(numpyEnvironment))
         topFrame = tk.Frame(root)
@@ -925,53 +929,42 @@ if __name__ == "__main__":
                 tempRow.append(1)
         impassableTerrainArray.append(tempRow)
 
-    # Spawn bots and launch thread
+    # Spawn bots and launch bots' thread
     for index in range(numberOfBots):
         bot = Bot(index)
-        if index == 0:
-            bot.pathRGB = np.array([255, 50, 50, 255]).tolist()
-        else:
-            bot.pathRGB = np.array([55, 250, 150, 255]).tolist()
-        bot.pathHex = "#" + str(hex(bot.pathRGB[0]))[2:] + str(hex(bot.pathRGB[1]))[2:] + str(hex(bot.pathRGB[2]))[2:]
         listOfBots.append(bot)
     myThread = MyThread(listOfBots, numEquipment)
-    # myThread.isDaemon()
     myThread.start()
 
     if GUI:
-        for bot in listOfBots:
-            bot.drawCircle = window.create_oval(bot.x - botDrawRadius, bot.y - botDrawRadius, bot.x + botDrawRadius,
-                                                bot.y + botDrawRadius, fill=bot.pathHex, outline=bot.pathHex)
-
         startEndLines = drawStartEndLines(window)
-
         while True:
-            # startTime = time.time()
-            window.delete("all")
-            workingImage = ImageTk.PhotoImage(Image.fromarray(numpyEnvironment))
-            window.create_image(0, 0, anchor=tk.N + tk.W, image=workingImage)
-            for line in startEndLines:
-                window.delete(line)
-            startEndLines = drawStartEndLines(window)
-
-            for bot in listOfBots:
-                window.delete(bot.drawCircle)
-                bot.drawCircle = window.create_rectangle(bot.x - botDrawRadius, bot.y - botDrawRadius, bot.x + botDrawRadius,
-                                               bot.y + botDrawRadius, fill=bot.pathHex, outline=bot.pathHex)
-                if bot.isCarryingCargo:
-                    window.delete(bot.drawCargo)
-                    bot.drawCargo = window.create_rectangle(bot.x - botDrawRadius - 2, bot.y - (1.5 * botDrawRadius),
-                                                       bot.x + botDrawRadius + 2, bot.y - (0.5 * botDrawRadius),
-                                                       fill='gray78', outline='gray78')
-            for c in circles:
-                window.create_rectangle(c[1] - botDrawRadius, c[0] - botDrawRadius, c[1] + botDrawRadius,
-                                               c[0] + botDrawRadius, fill='white', outline='white')
-
-            window.pack()
-            window.update()
-            # print("Time taken for entire update", time.time() - startTime)
             if readyToExit:
-                print("Program total runtime = ", time.time() - programStartTime)
-                root.destroy()
-                exit()
+                break
 
+            else:
+                window.delete("all")
+                workingImage = ImageTk.PhotoImage(Image.fromarray(numpyEnvironment))
+                window.create_image(0, 0, anchor=tk.N + tk.W, image=workingImage)
+                for line in startEndLines:
+                    window.delete(line)
+                startEndLines = drawStartEndLines(window)
+
+                for bot in listOfBots:
+                    window.delete(bot.drawCircle)
+                    bot.drawCircle = window.create_rectangle(bot.x - botDrawRadius, bot.y - botDrawRadius, bot.x + botDrawRadius,
+                                                             bot.y + botDrawRadius, fill=bot.pathHex, outline=bot.pathHex)
+                    if bot.isCarryingCargo:
+                        window.delete(bot.drawCargo)
+                        bot.drawCargo = window.create_rectangle(bot.x - botDrawRadius - 2, bot.y - (1.5 * botDrawRadius),
+                                                                bot.x + botDrawRadius + 2, bot.y - (0.5 * botDrawRadius),
+                                                                fill='gray78', outline='gray78')
+
+                for c in highlightRects:
+                    window.create_rectangle(c[1] - botDrawRadius, c[0] - botDrawRadius, c[1] + botDrawRadius,
+                                            c[0] + botDrawRadius, fill='white', outline='white')
+
+                window.pack()
+                window.update()
+
+    print("Total program runtime = {0:.2f}".format(time.time() - programStartTime))
