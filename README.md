@@ -10,5 +10,4 @@ This project was completed for the COMP-4905 class at Carleton University. It's 
 
 A custom environment can be used by editing lines 880, 881, and 882 of the `main.py` file. Supply your own PNG on line 880, supply y and x values for the robots starting point on line 881, and then supply y and x values for the robots ending point on line 882. NOTE: Robots can only travel along black pixels in your PNG file. For the program to complete successfully,  there must exist at least one black pixel path between the start and end points.  
 
-Thank you for taking the time to explore my work. 
-Lukas
+Thank you for taking the time to explore my work.
