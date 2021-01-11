@@ -877,6 +877,10 @@ if __name__ == "__main__":
     else:
         environmentPath = "environments/environment1.png"
 
+#     environmentPath = "path_to_your_custom_png_file.png"
+#     startCoord = [_, _]  # Format is [Y value of starting point, X value of starting point]   
+#     endCoord = [_, _]    # Format is [Y value of ending point, X value of ending point]    
+        
     # Start program timer
     programStartTime = time.time()
 
