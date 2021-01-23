@@ -4,7 +4,7 @@ This project was completed for the COMP-4905 class at Carleton University. It's 
 
 ## To run the program:
 1. Clone this repository.
-2. Run the `install_dependencies.bat` file.
+2. Run the `install_dependencies.bat` file. NOTE: The commands in this file may be incompatible with newer versions of Python. If an error occurs, then use Python 3.8.
 3. Run the `run_example.bat` file. This will launch a small example run through of the program. 
 4. Program parameters (number of bots, communication range, environment, etc.) can be edited in line 2 of the `run_example.bat` file. 
 
