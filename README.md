@@ -1,6 +1,6 @@
 # Swarm Robot Path Discovery and Optimization
 
-This project was completed for the COMP-4905 class at Carleton University. It's an honours project that was completed under the supervision and guidance of Professor Mark Lanthier. We collaborated on the ideas and goals of the project. I wrote all of the source code and the PDF report. The project was given an A+ by Prof. Lanthier. 
+This project was completed for the COMP-4905 class at Carleton University. It's an honours project that was completed under the supervision and guidance of Professor Mark Lanthier. We collaborated on the ideas and goals of the project. I wrote all of the source code and the PDF report.
 
 ## To run the program:
 1. Clone this repository.
